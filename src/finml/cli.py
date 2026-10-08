@@ -51,6 +51,10 @@ def cmd_train(args):
                   f"{row['test']:>8.3f}{row['secondes']:>10.1f}")
         for k, v in r.business_metrics.items():
             print(f"  {k:<40}{v:>14,.2f}".replace(",", " "))
+        if r.fairness:
+            print(f"  audit d'équité : {r.fairness['statut']}")
+            for alerte in r.fairness["alertes"]:
+                print(f"    {alerte}")
     if failed:
         sys.exit(1)
 

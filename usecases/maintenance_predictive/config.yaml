@@ -1,0 +1,77 @@
+name: maintenance_predictive
+description: Probabilité qu'une machine tombe en panne au prochain cycle, pour planifier une intervention préventive.
+task: tabular_classification
+registered_model: finml-maintenance-predictive
+target: panne
+positive_label: 1
+
+# Données réelles : UCI « AI4I 2020 Predictive Maintenance », 10 000 relevés de capteurs.
+# Les colonnes de mode de panne (TWF, HDF, PWF, OSF, RNF) sont supprimées : fuite de la cible.
+features:
+  numeric:
+    - temperature_air_k
+    - temperature_process_k
+    - vitesse_rotation_tr_min
+    - couple_nm
+    - usure_outil_min
+  categorical:
+    - gamme
+
+# Bornes physiques plausibles : une valeur hors bornes signale un capteur défaillant.
+schema:
+  temperature_air_k: {min: 250, max: 350}
+  temperature_process_k: {min: 250, max: 380}
+  vitesse_rotation_tr_min: {min: 0, max: 5000}
+  couple_nm: {min: 0, max: 150}
+  usure_outil_min: {min: 0, max: 400}
+  gamme: {allowed: [L, M, H]}
+  panne: {allowed: [0, 1]}
+
+data:
+  generator: prepare.py
+  path: data/maintenance_predictive.csv
+  n_rows: 10000
+  seed: 42
+
+# 3,4 % de pannes : l'average precision mesure la qualité du classement des cas rares,
+# là où l'AUC reste flatteuse.
+metric: average_precision
+min_score: 0.60
+decision_threshold: 0.5
+cv_folds: 5
+
+# Hypothèses métier (à remplacer par les chiffres du site) :
+# - une panne non anticipée coûte 3 000 EUR : arrêt de ligne, réparation curative, pièces en urgence ;
+# - une intervention préventive inutile coûte 250 EUR : technicien et arrêt planifié court ;
+# - 50 000 cycles contrôlés par an.
+business:
+  kind: cost
+  cost_false_negative: 3000
+  cost_false_positive: 250
+  annual_volume: 50000
+
+candidates:
+  - name: regression_logistique
+    type: logistic_regression
+    params: {C: 1.0}
+  - name: k_plus_proches_voisins
+    type: knn
+    params: {n_neighbors: 15}
+  - name: random_forest
+    type: random_forest
+    params: {n_estimators: 300, min_samples_leaf: 2}
+  - name: extra_trees
+    type: extra_trees
+    params: {n_estimators: 300, min_samples_leaf: 2}
+  - name: gradient_boosting_histogramme
+    type: hist_gradient_boosting
+    params: {max_iter: 300, learning_rate: 0.05}
+  - name: xgboost
+    type: xgboost
+    params: {n_estimators: 400, max_depth: 5, learning_rate: 0.05}
+  - name: lightgbm
+    type: lightgbm
+    params: {n_estimators: 400, num_leaves: 31, learning_rate: 0.05}
+  - name: reseau_neurones_pytorch
+    type: torch_mlp
+    params: {hidden: [64, 32], dropout: 0.1, epochs: 80}

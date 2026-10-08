@@ -70,3 +70,29 @@ def test_tournament_ranks_by_cross_validation_and_skips_missing_deps(project, mo
     assert "reseau_neurones_pytorch" not in {row["candidat"] for row in result.leaderboard}
     assert len(result.leaderboard) == len(load_config("retard_paiement").candidates) - 1
     assert "metier_economie_annuelle" in result.business_metrics
+
+
+def test_threshold_is_exact_not_on_a_grid():
+    """Coût très asymétrique : le seuil optimal peut être sous 0,05, une grille le manquerait."""
+    y = np.array([0] * 900 + [1] * 100)
+    proba = np.r_[np.full(900, 0.001), np.full(100, 0.02)]
+    t = best_cost_threshold(y, proba, COST)
+    assert t == 0.02
+    assert cost_report(y, proba, t, COST)["metier_rappel"] == 1.0
+
+
+def test_capacity_limits_the_share_flagged():
+    rng = np.random.default_rng(2)
+    y = rng.integers(0, 2, 1000)
+    proba = np.clip(0.4 * y + rng.random(1000) * 0.6, 0, 1)
+    capped = COST.model_copy(update={"cost_false_negative": 400, "capacity": 0.2})
+    t = best_cost_threshold(y, proba, capped)
+    report = cost_report(y, proba, t, capped)
+    assert report["metier_part_signalee"] <= 0.2
+    assert report["metier_cout_par_cas_sans_modele"] == 400 * y.mean()  # seule politique réalisable
+
+
+def test_no_action_when_model_cannot_beat_doing_nothing():
+    y = np.array([0, 0, 0, 1])
+    proba = np.array([0.9, 0.8, 0.7, 0.1])  # le modèle classe à l'envers
+    assert best_cost_threshold(y, proba, COST) > 1

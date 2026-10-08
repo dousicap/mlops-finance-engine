@@ -33,6 +33,7 @@ import finml
 from finml import business
 from finml import data as data_mod
 from finml.config import UseCaseConfig, load_config
+from finml.fairness import fairness_report
 from finml.models import build_estimator, dump_estimator, predict_frame, text_class_scores
 
 CHAMPION, CHALLENGER = "champion", "challenger"
@@ -55,6 +56,7 @@ class TrainResult:
     all_scores: dict[str, float]
     leaderboard: list[dict] = field(default_factory=list)
     business_metrics: dict[str, float] = field(default_factory=dict)
+    fairness: dict = field(default_factory=dict)
 
 
 def default_tracking_uri() -> str:
@@ -169,8 +171,10 @@ def train(name: str) -> TrainResult:
         y = df[cfg.target]
     else:
         X, y = df[cfg.features.text].astype(str), df[cfg.target].astype(str)
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=cfg.test_size, random_state=cfg.data.seed, stratify=y
+    # Les colonnes sensibles suivent le même découpage que X : elles ne servent qu'à l'audit.
+    S = df[cfg.fairness.sensitive] if cfg.fairness else pd.DataFrame(index=df.index)
+    X_train, X_test, y_train, y_test, _, S_test = train_test_split(
+        X, y, S, test_size=cfg.test_size, random_state=cfg.data.seed, stratify=y
     )
     X_train, X_test = X_train.reset_index(drop=True), X_test.reset_index(drop=True)
     y_train, y_test = y_train.reset_index(drop=True), y_test.reset_index(drop=True)
@@ -226,11 +230,17 @@ def train(name: str) -> TrainResult:
 
         threshold, biz = _calibrate_business(cfg, y_train, oofs[best], fitted[best], X_test, y_test)
         served_cfg = cfg.model_copy(update={"decision_threshold": threshold})
+        fair_metrics, fair_detail = {}, {}
+        if cfg.fairness:
+            flag = _scores(cfg, fitted[best], X_test) >= threshold
+            fair_metrics, fair_detail = fairness_report(y_test, flag, S_test, cfg.fairness)
+            mlflow.set_tag("equite_statut", fair_detail["statut"])
+            mlflow.log_dict(fair_detail, "equite.json")
         with mlflow.start_run(run_id=runs[best], nested=True):
-            mlflow.log_metrics(biz)
+            mlflow.log_metrics({**biz, **fair_metrics})
             example = X_test.head(3).to_frame() if cfg.task == "text_classification" else X_test.head(3)
             model_info = _log_model(served_cfg, fitted[best], X_test, example)
-        mlflow.log_metrics(biz)
+        mlflow.log_metrics({**biz, **fair_metrics})
 
     mv = mlflow.register_model(model_info.model_uri, cfg.registered_model)
     client = MlflowClient()
@@ -238,7 +248,7 @@ def train(name: str) -> TrainResult:
     alias = _promote(client, cfg, mv.version, best_test)
     scores = {r["candidat"]: r["test"] for r in board}
     return TrainResult(cfg.name, best, best_test, cfg.metric, runs[best], mv.version, alias, scores,
-                       board, biz)
+                       board, biz, fair_detail)
 
 
 SERVING_CODE = Path(__file__).with_name("serving_model.py")

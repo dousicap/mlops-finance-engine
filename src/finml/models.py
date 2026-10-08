@@ -120,6 +120,10 @@ TRUSTED_TYPES = frozenset(
         "sklearn.calibration._SigmoidCalibration",
         "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
         "sklearn.neural_network._stochastic_optimizers.AdamOptimizer",
+        # KNN : l'algorithme « auto » construit un arbre selon la dimension des données
+        "sklearn.neighbors._kd_tree.KDTree",
+        "sklearn.neighbors._ball_tree.BallTree",
+        "sklearn.metrics._dist_metrics.EuclideanDistance64",
         "finml.torch_model.TorchMLPClassifier",
         "finml.vector.TfidfEmbedder",
         "finml.vector.SentenceTransformerEmbedder",

@@ -9,13 +9,23 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 
 
+USECASES = ("defaut_credit", "imputation_comptable", "maintenance_predictive", "retard_paiement")
+# Jeux réels : échantillon stratifié, trois candidats, porte qualité abaissée à l'échelle du test.
+REAL_DATA = {"defaut_credit": 0.6, "maintenance_predictive": 0.3}
+
+
 def _shrink(root: Path):
     """Jeux de données réduits pour garder des tests rapides."""
-    for name, n in {"retard_paiement": 3000, "imputation_comptable": 2500}.items():
+    sizes = {"retard_paiement": 3000, "imputation_comptable": 2500,
+             "defaut_credit": 3000, "maintenance_predictive": 3000}
+    for name, n in sizes.items():
         cfg_file = root / "usecases" / name / "config.yaml"
         cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
         cfg["data"]["n_rows"] = n
         cfg["cv_folds"] = 3
+        if name in REAL_DATA:
+            cfg["candidates"] = cfg["candidates"][:3]
+            cfg["min_score"] = REAL_DATA[name]
         cfg_file.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
 
 
@@ -39,7 +49,7 @@ def set_config(project: Path, usecase: str, **changes):
 
 @pytest.fixture(scope="session")
 def trained_base(tmp_path_factory):
-    """Entraîne et exporte les deux cas d'usage une seule fois pour toute la session."""
+    """Entraîne et exporte tous les cas d'usage une seule fois pour toute la session."""
     from finml import data
     from finml.config import load_config
     from finml.export import export_champion
@@ -52,7 +62,7 @@ def trained_base(tmp_path_factory):
         mp.chdir(base)
         mp.setenv("FINML_ROOT", str(base))
         mp.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{base / 'mlflow.db'}")
-        for name in ("retard_paiement", "imputation_comptable"):
+        for name in USECASES:
             data.generate(load_config(name))
             train(name)
             export_champion(name, base / "models")

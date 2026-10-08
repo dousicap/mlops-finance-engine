@@ -19,8 +19,6 @@ import numpy as np
 
 from finml.config import AutomationBusiness, CostBusiness
 
-THRESHOLD_GRID = np.round(np.arange(0.05, 0.951, 0.01), 2)
-
 
 def _cost(y: np.ndarray, flag: np.ndarray, b: CostBusiness) -> float:
     fn = np.sum((y == 1) & ~flag)
@@ -28,21 +26,45 @@ def _cost(y: np.ndarray, flag: np.ndarray, b: CostBusiness) -> float:
     return float(fn * b.cost_false_negative + fp * b.cost_false_positive)
 
 
+NOBODY = 1.01  # seuil au-dessus de toute probabilité : aucun cas signalé
+
+
 def best_cost_threshold(y, proba, b: CostBusiness) -> float:
-    y, proba = np.asarray(y), np.asarray(proba)
-    costs = [_cost(y, proba >= t, b) for t in THRESHOLD_GRID]
-    return float(THRESHOLD_GRID[int(np.argmin(costs))])
+    """Seuil exact qui minimise le coût, parmi les scores observés (pas de grille).
+
+    Les cas sont triés par probabilité décroissante. Signaler les k premiers coûte
+    (positifs manqués) x coût FN + (négatifs signalés) x coût FP. Une coupure n'est possible
+    qu'entre deux scores différents. Avec une capacité, la part signalée ne la dépasse pas.
+    """
+    y, p = np.asarray(y).astype(int), np.asarray(proba, dtype=float)
+    order = np.argsort(-p, kind="stable")
+    ps, ys = p[order], y[order]
+    tp, fp = np.cumsum(ys == 1), np.cumsum(ys == 0)
+    costs = (tp[-1] - tp) * b.cost_false_negative + fp * b.cost_false_positive
+    cut = np.r_[ps[1:] < ps[:-1], True]  # fin d'un groupe de scores égaux
+    if b.capacity is not None:
+        cut &= np.arange(1, len(ps) + 1) <= b.capacity * len(ps)
+    nobody = tp[-1] * b.cost_false_negative
+    idx = np.where(cut)[0]
+    if len(idx) == 0 or nobody <= costs[idx].min():
+        return NOBODY
+    return float(ps[idx[np.argmin(costs[idx])]])
 
 
 def cost_report(y, proba, threshold: float, b: CostBusiness) -> dict[str, float]:
-    """Coût par cas avec le modèle, comparé aux deux politiques sans modèle."""
+    """Coût par cas avec le modèle, comparé aux politiques sans modèle réalisables.
+
+    Sans contrainte de capacité : ne signaler personne, ou signaler tout le monde.
+    Avec une capacité inférieure à 100 % : seule « ne signaler personne » est réalisable.
+    """
     y, proba = np.asarray(y), np.asarray(proba)
     n = len(y)
     flag = proba >= threshold
     model = _cost(y, flag, b) / n
-    nothing = _cost(y, np.zeros(n, bool), b) / n       # aucune relance préventive
-    everyone = _cost(y, np.ones(n, bool), b) / n       # relance préventive de toutes les factures
-    baseline = min(nothing, everyone)
+    policies = [_cost(y, np.zeros(n, bool), b) / n]                 # aucune action préventive
+    if b.capacity is None or b.capacity >= 1:
+        policies.append(_cost(y, np.ones(n, bool), b) / n)          # action sur tous les cas
+    baseline = min(policies)
     tp = np.sum((y == 1) & flag)
     return {
         "metier_seuil": threshold,

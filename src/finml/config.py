@@ -62,6 +62,8 @@ class CostBusiness(BaseModel):
     cost_false_negative: float = Field(gt=0, description="Coût d'un cas positif non détecté")
     cost_false_positive: float = Field(ge=0, description="Coût d'une action déclenchée à tort")
     annual_volume: int = Field(gt=0, description="Nombre de cas traités par an")
+    capacity: float | None = Field(default=None, gt=0, le=1,
+                                   description="Part maximale de cas que l'équipe peut traiter")
     unit: str = "EUR"
 
 
@@ -72,6 +74,21 @@ class AutomationBusiness(BaseModel):
     target_precision: float = Field(gt=0, le=1)
     annual_volume: int = Field(gt=0)
     minutes_per_item: float = Field(gt=0, description="Temps de traitement manuel d'un élément")
+
+
+class FairnessConfig(BaseModel):
+    """Audit d'équité d'une décision binaire (système à haut risque au sens de l'AI Act).
+
+    Les colonnes sensibles sont présentes dans les données mais ne sont jamais des variables
+    du modèle : elles servent seulement à mesurer si la décision traite les groupes de la même
+    façon. Une alerte ne bloque pas l'entraînement : elle demande une décision humaine.
+    """
+
+    sensitive: list[str] = Field(min_length=1)
+    max_recall_gap: float = Field(default=0.10, gt=0, le=1, description="Égalité des chances")
+    min_favorable_ratio: float = Field(default=0.80, gt=0, le=1, description="Règle des quatre cinquièmes")
+    min_group_size: int = Field(default=100, ge=1, description="Effectif minimal pour comparer un groupe")
+    min_group_positives: int = Field(default=30, ge=1, description="Cas positifs minimaux pour comparer un rappel")
 
 
 class DataConfig(BaseModel):
@@ -119,6 +136,7 @@ class UseCaseConfig(BaseModel):
     cv_folds: int = Field(default=5, ge=2, le=10)  # validation croisée pour départager les candidats
     business: CostBusiness | AutomationBusiness | None = Field(default=None, discriminator="kind")
     llm: LLMConfig | None = None
+    fairness: FairnessConfig | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -138,6 +156,12 @@ class UseCaseConfig(BaseModel):
             raise ValueError("Le second avis LLM s'applique aux cas d'usage texte")
         if self.business and self.business.kind == "automation" and self.task != "text_classification":
             raise ValueError("Le bloc business « automation » s'applique à une classification multi-classes")
+        if self.fairness:
+            if self.task != "tabular_classification":
+                raise ValueError("L'audit d'équité s'applique à une décision binaire tabulaire")
+            leaked = set(self.fairness.sensitive) & set(self.features.all + [self.target])
+            if leaked:
+                raise ValueError(f"Colonnes sensibles utilisées comme variables ou cible : {sorted(leaked)}")
         return self
 
 

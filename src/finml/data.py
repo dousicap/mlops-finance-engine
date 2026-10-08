@@ -63,6 +63,8 @@ def validate(df: pd.DataFrame, cfg: UseCaseConfig, *, with_target: bool = True) 
     """Vérifie le contrat de données : colonnes présentes, valeurs manquantes, bornes, modalités."""
     report = QualityReport(n_rows=len(df))
     required = list(cfg.features.all) + ([cfg.target] if with_target else [])
+    if with_target and cfg.fairness:
+        required += cfg.fairness.sensitive  # nécessaires à l'audit, jamais demandées à l'API
     missing = [c for c in required if c not in df.columns]
     if missing:
         report.errors.append(f"Colonnes manquantes : {missing}")

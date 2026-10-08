@@ -7,7 +7,7 @@ from finml.config import UseCaseConfig, list_usecases, load_config
 
 
 def test_usecases_are_discovered(project):
-    assert list_usecases() == ["imputation_comptable", "retard_paiement"]
+    assert list_usecases() == ["defaut_credit", "imputation_comptable", "maintenance_predictive", "retard_paiement"]
 
 
 def test_configs_are_valid(project):
@@ -24,7 +24,7 @@ def test_target_cannot_be_a_feature(project):
         UseCaseConfig.model_validate(raw)
 
 
-@pytest.mark.parametrize("name", ["retard_paiement", "imputation_comptable"])
+@pytest.mark.parametrize("name", ["retard_paiement", "imputation_comptable", "defaut_credit", "maintenance_predictive"])
 def test_generation_is_deterministic_and_valid(project, name):
     cfg = load_config(name)
     data.generate(cfg)
@@ -61,3 +61,21 @@ def test_retard_target_is_balanced_enough(project):
     data.generate(cfg)
     rate = data.load(cfg)[cfg.target].mean()
     assert 0.2 < rate < 0.6
+
+
+@pytest.mark.parametrize("name", ["defaut_credit", "maintenance_predictive"])
+def test_real_source_is_checked_before_use(project, name):
+    """Une source versionnée modifiée arrête la préparation : pas d'entraînement sur des données inconnues."""
+    source = next((project / "usecases" / name / "source").glob("*.csv.gz"))
+    source.write_bytes(source.read_bytes() + b"\0")
+    with pytest.raises(ValueError, match="Source modifiée"):
+        data.generate(load_config(name))
+
+
+def test_failure_mode_columns_are_dropped(project):
+    """TWF, HDF, PWF, OSF, RNF décrivent la panne après coup : les garder serait une fuite."""
+    cfg = load_config("maintenance_predictive")
+    data.generate(cfg)
+    df = data.load(cfg)
+    assert not {"TWF", "HDF", "PWF", "OSF", "RNF", "UDI", "Product ID"} & set(df.columns)
+    assert set(cfg.features.all) | {cfg.target} == set(df.columns)

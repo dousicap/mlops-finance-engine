@@ -11,7 +11,7 @@ from finml.config import load_config
 from finml.models import build_estimator, dump_estimator, load_estimator, text_class_scores
 
 
-@pytest.mark.parametrize("usecase", ["retard_paiement", "imputation_comptable"])
+@pytest.mark.parametrize("usecase", ["retard_paiement", "imputation_comptable", "defaut_credit", "maintenance_predictive"])
 def test_every_candidate_roundtrips_through_skops(project, tmp_path, usecase):
     cfg = load_config(usecase)
     data.generate(cfg)

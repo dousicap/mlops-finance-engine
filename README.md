@@ -1,28 +1,34 @@
-# finml : automatiser des décisions financières avec MLOps et LLMOps
+# finml : automatiser des décisions métier avec MLOps et LLMOps
 
 Moteur de machine learning industrialisé une seule fois, réutilisé pour chaque décision métier à
-automatiser dans une direction financière ou un cabinet comptable. Chaque cas d'usage part d'une
+automatiser : direction financière, cabinet comptable, risque de crédit, maintenance industrielle. Chaque cas d'usage part d'une
 spec (décision, valeur, critères d'acceptation), se déclare dans un dossier (configuration +
 données), et le moteur fait le reste :
 
 1. contrôle qualité des données (contrat déclaré) ;
 2. tournoi de modèles en validation croisée, du plus simple au réseau de neurones ;
-3. calibrage du seuil de décision sur la valeur métier (euros, heures), pas sur un score ;
-4. suivi MLflow, porte qualité, promotion champion / challenger dans le Registry ;
-5. API, conteneur, déploiement AWS (ECS) ou Kubernetes ;
-6. surveillance : métriques, journal des prédictions, dérive, alertes ;
-7. second avis LLM tracé et évalué pour les cas que le modèle ne tranche pas.
+3. calibrage du seuil de décision sur la valeur métier (euros, heures), sous contrainte de
+   capacité de l'équipe, pas sur un score ;
+4. audit d'équité pour les décisions à haut risque (AI Act) ;
+5. suivi MLflow, porte qualité, promotion champion / challenger dans le Registry ;
+6. API, conteneur, déploiement AWS (ECS) ou Kubernetes ;
+7. surveillance : métriques, journal des prédictions, dérive, alertes ;
+8. second avis LLM tracé et évalué pour les cas que le modèle ne tranche pas.
 
-> Les données sont fictives et générées par code, avec du bruit réaliste (3 % d'erreurs
-> d'étiquetage, libellés abrégés). Les chiffres démontrent la chaîne et la méthode, pas une
-> performance client. Brancher un vrai historique revient à remplacer le générateur par un CSV.
+> Deux cas tournent sur des jeux publics UCI (licence CC BY 4.0), versionnés avec leur empreinte
+> SHA-256 : `defaut_credit` (données réelles, 30 000 clients) et `maintenance_predictive`
+> (10 000 relevés, jeu de référence synthétique publié par son auteur). Les deux cas comptables
+> utilisent des données générées par code, avec du bruit réaliste. Les hypothèses de coût sont
+> déclarées dans chaque configuration et restent à valider avec le métier.
 
 ## Cas d'usage livrés
 
 | Cas d'usage | Décision automatisée | Champion | Score test | Valeur métier mesurée |
 |---|---|---|---|---|
-| `retard_paiement` | Quelles factures relancer avant échéance ? | Régression logistique | ROC AUC 0,741 | 11 025 € par an économisés sur 8 000 factures |
+| `retard_paiement` | Quelles factures relancer avant échéance ? | Régression logistique | ROC AUC 0,741 | 11 575 € par an sur 8 000 factures |
 | `imputation_comptable` | Sur quel compte du PCG passer cette pièce d'achat ? | TF-IDF + naive Bayes | Exactitude 0,885, top-3 0,937 | 85 % des pièces passées seules à 97 % de précision, 508 h par an |
+| `defaut_credit` | Quels titulaires de carte surveiller avant un défaut ? | Random forest | ROC AUC 0,776 | Coût par client de 110,58 € à 59,91 €, 6 000 dossiers au plus, audit d'équité ok |
+| `maintenance_predictive` | Quelle machine arrêter avant la panne ? | Gradient boosting par histogramme | Average precision 0,855 | 87 % des pannes anticipées, coût par cycle de 102 € à 22,88 € |
 
 Chaque cas a sa spec dans [`docs/specs/`](docs/specs) : décision, hypothèses de valeur, données,
 modèles, critères d'acceptation, exploitation, risques. Le gabarit est
@@ -50,6 +56,30 @@ Le classement complet est enregistré dans MLflow (`classement.csv`) et affiché
 | Naive Bayes | 0,706 | 0,017 | 0,719 |
 | k plus proches voisins | 0,702 | 0,006 | 0,692 |
 
+**defaut_credit** (ROC AUC, 6 candidats, données réelles)
+
+| Candidat | CV moyenne | Écart-type | Test |
+|---|---|---|---|
+| **Random forest** | **0,783** | 0,004 | **0,776** |
+| XGBoost | 0,781 | 0,006 | 0,774 |
+| Gradient boosting histogramme | 0,780 | 0,004 | 0,777 |
+| LightGBM | 0,780 | 0,006 | 0,773 |
+| Réseau de neurones PyTorch (servi en ONNX) | 0,780 | 0,006 | 0,771 |
+| Régression logistique | 0,727 | 0,010 | 0,707 |
+
+**maintenance_predictive** (average precision, 8 candidats, 3,4 % de pannes)
+
+| Candidat | CV moyenne | Écart-type | Test |
+|---|---|---|---|
+| **Gradient boosting histogramme** | **0,802** | 0,038 | **0,855** |
+| LightGBM | 0,792 | 0,040 | 0,847 |
+| Random forest | 0,772 | 0,021 | 0,787 |
+| XGBoost | 0,769 | 0,042 | 0,856 |
+| Réseau de neurones PyTorch (servi en ONNX) | 0,692 | 0,037 | 0,698 |
+| Extra trees | 0,692 | 0,026 | 0,669 |
+| k plus proches voisins | 0,517 | 0,024 | 0,486 |
+| Régression logistique | 0,469 | 0,032 | 0,421 |
+
 **imputation_comptable** (exactitude, 5 candidats)
 
 | Candidat | CV moyenne | Écart-type | Test |
@@ -64,6 +94,10 @@ Ce que le tournoi montre :
 - Le signal du retard de paiement est surtout linéaire : la régression logistique bat les arbres
   boostés et le réseau PyTorch. Le moteur choisit sur la mesure, pas sur la réputation du modèle,
   et garde le modèle le plus simple à expliquer à un DAF.
+- En maintenance, c'est l'inverse : la régression logistique tombe à 0,47 contre 0,80. Les pannes
+  suivent des règles à seuil (dissipation thermique, puissance, surcharge de l'outil).
+- Sur le jeu de maintenance, XGBoost a le meilleur test (0,856) mais pas la meilleure CV : il
+  n'est pas retenu. Choisir sur le test, c'est sur-apprendre le jeu de test.
 - Les écarts entre les cinq premiers sont inférieurs à un écart-type de CV : ils sont à égalité.
   C'est pourquoi la sélection se fait sur la CV et non sur le test, qui ne sert qu'à confirmer.
 - Sur des libellés bancaires courts et bruités, les n-grammes de caractères battent des embeddings
@@ -78,19 +112,24 @@ Ce que le tournoi montre :
 Un score ne dit pas quoi faire. Chaque configuration déclare un bloc `business`, et le moteur
 calibre le seuil servi sur les prédictions hors échantillon de la validation croisée.
 
-**Coût (`kind: cost`, retard_paiement).** Relancer une facture coûte 15 € (temps du chargé de
-recouvrement), un retard non anticipé en coûte 40 € (BFR, agios, relances tardives). Le seuil
-retenu minimise le coût attendu et se compare aux deux politiques sans modèle (relancer tout le
-monde, ne relancer personne).
+**Coût (`kind: cost`).** Le seuil retenu minimise le coût attendu. Il est cherché exactement
+parmi les scores observés, pas sur une grille, et se compare aux politiques sans modèle
+réalisables. Un plafond `capacity` limite la part de cas signalés à ce que l'équipe peut traiter.
 
-| Seuil | Factures signalées | Retards captés | Coût par facture | Sans modèle | Économie annuelle |
-|---|---|---|---|---|---|
-| 0,32 | 60 % | 79 % | 7,54 € | 8,92 € | 11 025 € |
+| Cas | Coût FN / FP | Seuil | Part signalée | Rappel | Coût par cas | Sans modèle | Économie annuelle |
+|---|---|---|---|---|---|---|---|
+| retard_paiement | 40 € / 15 € | 0,29 | 67 % | 85 % | 7,47 € | 8,92 € | 11 575 € |
+| defaut_credit | 500 € / 60 €, capacité 20 % | 0,33 | 20 % | 50 % | 59,91 € | 110,58 € | 1 520 200 € |
+| maintenance_predictive | 3 000 € / 250 € | 0,0088 | 6,7 % | 87 % | 22,88 € | 102 € | 3 956 250 € |
 
-Point d'entretien : avec 80 € / 4 €, l'économie devenait négative, car relancer tout le monde
-coûtait moins cher que le modèle. Le modèle ne crée de la valeur que si une relance coûte plus
-d'environ un quart d'un retard. Cette analyse de sensibilité est à faire avec le métier avant
-tout développement.
+Trois points d'entretien, tous mesurés :
+- `retard_paiement` avec 80 € / 4 € : le modèle fait perdre 560 € par an, car relancer tout le
+  monde coûte moins cher. Le modèle ne crée de la valeur que si une relance coûte plus d'environ
+  un quart d'un retard. Cette sensibilité se vérifie avec le métier avant tout développement.
+- `defaut_credit` sans plafond : le seuil optimal signale 67 % des clients, intenable pour une
+  équipe. Le plafond de 20 % rend la décision exploitable.
+- `maintenance_predictive` : avec un coût de 12 pour 1, le seuil optimal (0,0088) était hors de
+  la grille 0,05-0,95 utilisée au départ. D'où la recherche exacte.
 
 **Automatisation (`kind: automation`, imputation_comptable).** Le seuil est la confiance la plus
 basse qui garde 97 % de précision sur les écritures passées automatiquement. Résultat : 85 % des
@@ -99,6 +138,28 @@ pièce. Une cible de 98 % n'automatisait que 3 % des pièces : l'historique cont
 d'erreurs d'étiquetage, et nettoyer cet historique est le premier levier de gain.
 
 Les métriques `metier_*` sont tracées dans MLflow et embarquées dans `manifest.json`.
+
+## Audit d'équité (AI Act)
+
+Le scoring de crédit est un système à haut risque (AI Act, annexe III). Le bloc `fairness`
+déclare des colonnes sensibles. Elles sont présentes dans les données mais interdites comme
+variables du modèle (la configuration est refusée sinon). À chaque entraînement, le moteur mesure
+par groupe, au seuil servi : taux signalé, rappel, précision. Il trace dans MLflow l'écart de
+rappel et le ratio de taux favorable (règle des quatre cinquièmes), le détail dans `equite.json`
+et le statut en tag. Une alerte ne bloque pas le déploiement : elle exige une revue humaine.
+
+| defaut_credit | Écart de rappel (max 0,10) | Ratio de taux favorable (min 0,80) |
+|---|---|---|
+| Sexe | 0,012 | 0,967 |
+| Tranche d'âge | 0,060 | 0,959 |
+| Situation familiale | 0,010 | 0,989 |
+
+Deux constats mesurés :
+- le groupe « situation familiale autre » compte 75 clients et 12 défauts. Son rappel déclenchait
+  une fausse alerte. Les groupes de moins de 100 cas ou 30 positifs sont maintenant décrits mais
+  exclus des comparaisons ;
+- sans plafond de capacité, le ratio par âge tombe à 0,75 : alerte. Même modèle, autre seuil :
+  l'équité dépend de la politique de décision, pas seulement du modèle.
 
 ## Second avis LLM (LLMOps)
 
@@ -169,7 +230,7 @@ pip install -e ".[torch]" --extra-index-url https://download.pytorch.org/whl/cpu
 
 finml list                  # cas d'usage déclarés
 finml run-all               # données -> tournoi -> Registry -> export dans models/
-pytest                      # 37 tests
+pytest                      # 51 tests
 
 uvicorn finml.api:app --port 8000                     # http://localhost:8000/docs
 mlflow ui --backend-store-uri sqlite:///mlflow.db     # http://localhost:5000
@@ -215,19 +276,25 @@ Avec Docker (serveur MLflow, pgvector et API) : voir l'en-tête de `docker-compo
 1. Écrire la spec à partir de `docs/specs/_modele.md` : décision, valeur, critères d'acceptation.
 2. Créer `usecases/<nom>/config.yaml` : cible, variables, contrat de données, métrique, seuil
    minimal, candidats, bloc `business`, bloc `llm` optionnel.
-3. Fournir les données : un `generate.py` exposant `generate(n_rows, seed)`, ou un CSV.
+3. Fournir les données : un script exposant `generate(n_rows, seed)`. Pour un jeu réel, ce script
+   (`prepare.py`) lit la source versionnée dans `source/`, vérifie son empreinte SHA-256 et
+   prépare les colonnes. Une source modifiée arrête la chaîne.
 4. `finml run-all`. L'API expose automatiquement `POST /predict/<nom>`.
 
-Aucune ligne du moteur ne change. Cas suivants prévus de cette façon : détection de fraude sur
-notes de frais, défaut de crédit client, prévision de trésorerie, rapprochement bancaire.
+Aucune ligne du moteur ne change : `defaut_credit` et `maintenance_predictive` ont été ajoutés
+ainsi. Cas suivants prévus de la même façon : détection de fraude sur notes de frais, prévision
+de trésorerie, rapprochement bancaire.
 
 ## Ce que le moteur garantit
 
 | Garantie | Mécanisme |
 |---|---|
 | Données conformes | Contrat déclaré dans la configuration, vérifié à l'entraînement **et** à chaque appel API (422 sinon) |
+| Source intègre | Jeux réels versionnés, empreinte SHA-256 vérifiée avant chaque préparation, licence et citation dans `source/SOURCE.md` |
+| Pas de fuite de la cible | Variables connues après la décision supprimées à la préparation, vérifié par un test |
 | Choix de modèle robuste | Tournoi en validation croisée, test tenu à l'écart, classement archivé |
-| Seuil justifié | Calibré sur la valeur métier déclarée, comparé aux politiques sans modèle |
+| Seuil justifié | Calculé exactement sur la valeur métier déclarée, sous plafond de capacité, comparé aux politiques sans modèle réalisables |
+| Équité auditée | Colonnes sensibles interdites comme variables, écarts par groupe tracés à chaque version |
 | Traçabilité | Empreinte SHA-256 des données, SHA Git, paramètres et métriques de chaque candidat dans MLflow |
 | Pas de régression | Un nouveau modèle ne devient `champion` que s'il bat l'actuel, sinon il reste `challenger` |
 | Pas de modèle faible en production | Porte qualité `min_score` : la CI échoue, rien n'est déployé |
@@ -379,13 +446,19 @@ avec `appspec.yaml`.
 | MLflow 3 unifie ML classique et GenAI | Même serveur pour runs, Registry, traces LLM et évaluations de prompts |
 | Prompts traités comme du code | Fichier versionné, version tracée, évaluation avant adoption |
 | Observabilité LLM (tokens, coût, latence) | Spans MLflow et compteur Prometheus par résultat |
-| Souveraineté et AI Act | Fournisseur européen par défaut, humain dans la boucle, journal des décisions |
+| Souveraineté et AI Act | Audit d'équité des décisions à haut risque, fournisseur LLM européen par défaut, humain dans la boucle, journal des décisions |
+| Données réelles et lignée | Sources versionnées avec empreinte et licence, préparation reproductible |
 | Sécurité de la chaîne ML | Pas de pickle (skops, ONNX), OIDC sans clé, images non root, pods « restricted » |
 | Portabilité des modèles de deep learning | Entraînement PyTorch, service ONNX Runtime |
 
 ## Limites connues et suites
 
-- Données fictives : les chiffres valent démonstration de méthode, pas performance client.
+- Les cas comptables tournent sur données générées. `defaut_credit` date de 2005, en pleine crise
+  des cartes à Taïwan (22 % de défauts) : un portefeuille actuel demande un autre seuil.
+  `maintenance_predictive` est un jeu de référence synthétique. Les hypothèses de coût sont à
+  valider avec le métier.
+- Les probabilités des modèles boostés ne sont pas calibrées : le seuil de maintenance (0,0088)
+  est un rang, pas une probabilité de panne.
 - Second avis LLM testé hors ligne seulement (client `echo`). À mesurer avec une vraie clé
   avant de citer un gain.
 - Kubernetes validé par rendu, schéma et lint, jamais déployé sur un vrai cluster. Terraform
@@ -402,8 +475,9 @@ avec `appspec.yaml`.
 ```
 docs/specs/        une spec par cas d'usage + gabarit
 src/finml/         moteur : config, data, models, torch_model, vector, train, business,
-                   export, api, llm, monitoring, cli
-usecases/          un dossier par cas d'usage : config.yaml, generate.py, prompts/
+                   fairness, export, api, llm, monitoring, cli
+usecases/          un dossier par cas d'usage : config.yaml, generate.py ou prepare.py,
+                   source/ (jeu réel, empreinte, licence), prompts/
 tests/             unitaires et bout en bout (génération -> tournoi -> API -> LLM hors ligne)
 infra/terraform/   infrastructure AWS (ECS, rolling ou blue/green CodeDeploy)
 deploy/k8s/        manifestes Kubernetes (Kustomize, base + overlay prod)

@@ -1,6 +1,6 @@
 [project]
 name = "finml"
-version = "0.4.0"
+version = "0.5.0"
 description = "Socle MLOps réutilisable pour cas d'usage financiers : un moteur, des cas d'usage déclarés en configuration."
 readme = "README.md"
 requires-python = ">=3.11"

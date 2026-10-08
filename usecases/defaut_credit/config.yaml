@@ -1,0 +1,108 @@
+name: defaut_credit
+description: Probabilité qu'un titulaire de carte de crédit fasse défaut le mois suivant, pour cibler la surveillance renforcée.
+task: tabular_classification
+registered_model: finml-defaut-credit
+target: defaut_mois_suivant
+positive_label: 1
+
+# Données réelles : UCI « Default of Credit Card Clients », 30 000 clients, Taïwan 2005.
+# Sexe, âge et situation familiale sont exclus des variables du modèle et servent à l'audit d'équité.
+features:
+  numeric:
+    - limite_credit
+    - statut_paiement_m1
+    - statut_paiement_m2
+    - statut_paiement_m3
+    - statut_paiement_m4
+    - statut_paiement_m5
+    - statut_paiement_m6
+    - facture_m1
+    - facture_m2
+    - facture_m3
+    - facture_m4
+    - facture_m5
+    - facture_m6
+    - paiement_m1
+    - paiement_m2
+    - paiement_m3
+    - paiement_m4
+    - paiement_m5
+    - paiement_m6
+  categorical:
+    - niveau_etudes
+
+# Statut de paiement : -2 aucune utilisation, -1 payé intégralement, 0 crédit renouvelable
+# utilisé, 1 à 8 mois de retard. Montants en NT$.
+schema:
+  limite_credit: {min: 0, max: 5000000}
+  statut_paiement_m1: {min: -2, max: 9}
+  statut_paiement_m2: {min: -2, max: 9}
+  statut_paiement_m3: {min: -2, max: 9}
+  statut_paiement_m4: {min: -2, max: 9}
+  statut_paiement_m5: {min: -2, max: 9}
+  statut_paiement_m6: {min: -2, max: 9}
+  paiement_m1: {min: 0}
+  paiement_m2: {min: 0}
+  paiement_m3: {min: 0}
+  paiement_m4: {min: 0}
+  paiement_m5: {min: 0}
+  paiement_m6: {min: 0}
+  niveau_etudes: {allowed: [master, licence, lycee, autre]}
+  sexe: {allowed: [homme, femme]}
+  tranche_age: {allowed: [moins_30, 30-39, 40-49, 50_plus]}
+  situation_familiale: {allowed: [marie, celibataire, autre]}
+  defaut_mois_suivant: {allowed: [0, 1]}
+
+data:
+  generator: prepare.py   # lit la source versionnée, vérifie son empreinte, prépare les colonnes
+  path: data/defaut_credit.csv
+  n_rows: 30000
+  seed: 42
+
+metric: roc_auc
+min_score: 0.72
+decision_threshold: 0.5
+cv_folds: 5
+
+# Hypothèses métier (à remplacer par les chiffres de l'établissement) :
+# - un défaut non anticipé coûte 500 EUR de perte évitable : une surveillance déclenchée un mois
+#   plus tôt (baisse de limite, contact, plan de paiement) en récupère cette part ;
+# - une surveillance inutile coûte 60 EUR : temps d'analyste, marge perdue sur la limite réduite,
+#   risque d'attrition du client ;
+# - une campagne de revue par an sur un portefeuille de 30 000 cartes. Le taux de défaut de la
+#   source (22 % à un mois) reflète la crise des cartes de 2005 à Taïwan : il ne se multiplie pas
+#   par 12 ;
+# - l'équipe de recouvrement traite au plus 20 % du portefeuille par campagne (6 000 dossiers).
+#   Sans cette contrainte, le seuil de coût minimal signale 69 % des clients : intenable.
+business:
+  kind: cost
+  cost_false_negative: 500
+  cost_false_positive: 60
+  annual_volume: 30000
+  capacity: 0.20
+
+# Scoring de crédit : système à haut risque (AI Act, annexe III). Audit à chaque entraînement.
+fairness:
+  sensitive: [sexe, tranche_age, situation_familiale]
+  max_recall_gap: 0.10
+  min_favorable_ratio: 0.80
+
+candidates:
+  - name: regression_logistique
+    type: logistic_regression
+    params: {C: 1.0}
+  - name: random_forest
+    type: random_forest
+    params: {n_estimators: 300, max_depth: 10, min_samples_leaf: 10}
+  - name: gradient_boosting_histogramme
+    type: hist_gradient_boosting
+    params: {max_iter: 300, learning_rate: 0.05, max_depth: 4}
+  - name: xgboost
+    type: xgboost
+    params: {n_estimators: 400, max_depth: 4, learning_rate: 0.05, subsample: 0.8, colsample_bytree: 0.8}
+  - name: lightgbm
+    type: lightgbm
+    params: {n_estimators: 400, num_leaves: 15, learning_rate: 0.05, subsample: 0.8, subsample_freq: 1}
+  - name: reseau_neurones_pytorch
+    type: torch_mlp
+    params: {hidden: [64, 32], dropout: 0.2, epochs: 40}

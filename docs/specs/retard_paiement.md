@@ -19,7 +19,7 @@ hors échantillon de la validation croisée, puis mesuré sur le jeu de test.
 
 **Sensibilité mesurée.** Le modèle ne crée de valeur que si une relance coûte plus d'environ
 un quart d'un retard. À 80 EUR le retard et 4 EUR la relance, relancer toutes les factures
-reste la meilleure politique et le modèle n'apporte presque rien (112 EUR par an).
+reste la meilleure politique : le modèle fait perdre 560 EUR par an (mesuré).
 
 ## 3. Données
 Historique de factures : montant, délai contractuel, mois d'émission, ancienneté du client,
@@ -39,9 +39,9 @@ PyTorch (servi en ONNX).
 | Critère | Exigence | Mesuré |
 |---|---|---|
 | AUC sur le jeu de test | ≥ 0,70 | 0,741 (régression logistique) |
-| Gain annuel face à la meilleure politique sans modèle | > 0 | 11 025 EUR |
-| Factures signalées | | 60 %, seuil 0,32 |
-| Rappel sur les retards | | 79 % |
+| Gain annuel face à la meilleure politique sans modèle | > 0 | 11 575 EUR |
+| Factures signalées | | 67 %, seuil 0,29 |
+| Rappel sur les retards | | 85 % |
 | Latence par appel | < 100 ms | 36 ms en conteneur |
 
 Le modèle linéaire gagne parce que le signal est surtout additif. Les modèles d'arbres et

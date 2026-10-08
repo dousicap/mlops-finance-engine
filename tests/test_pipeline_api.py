@@ -54,7 +54,7 @@ def test_api_end_to_end(trained):
     with TestClient(create_app(models_dir=trained / "models")) as client:
         assert client.get("/health").status_code == 200
         names = [u["nom"] for u in client.get("/usecases").json()]
-        assert names == ["imputation_comptable", "retard_paiement"]
+        assert names == ["defaut_credit", "imputation_comptable", "maintenance_predictive", "retard_paiement"]
 
         r = client.post("/predict/retard_paiement", json={"records": [FACTURE, FACTURE_SURE]})
         assert r.status_code == 200
