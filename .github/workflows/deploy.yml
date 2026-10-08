@@ -25,10 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv pip install --system -e ".[dev]"
+          cache: pip
+      - run: pip install -e ".[dev]"
       - run: ruff check src tests usecases
       - run: pytest
 
@@ -38,10 +39,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: uv pip install --system -e .
+          cache: pip
+      - run: pip install -e .
       # Échoue si un modèle n'atteint pas son min_score : rien n'est déployé.
       - run: finml run-all --out models
       - name: Résumé des modèles
@@ -62,6 +64,8 @@ jobs:
 
   deploiement:
     needs: entrainement
+    # Ignoré tant que l'infrastructure AWS n'existe pas (variable de dépôt absente).
+    if: vars.AWS_DEPLOY_ROLE_ARN != ''
     runs-on: ubuntu-latest
     environment: production
     steps:
