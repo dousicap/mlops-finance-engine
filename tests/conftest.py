@@ -15,6 +15,7 @@ def _shrink(root: Path):
         cfg_file = root / "usecases" / name / "config.yaml"
         cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
         cfg["data"]["n_rows"] = n
+        cfg["cv_folds"] = 3
         cfg_file.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
 
 

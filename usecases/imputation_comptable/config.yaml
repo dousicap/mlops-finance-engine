@@ -27,6 +27,14 @@ labels:
   "627": Services bancaires et assimilés
   "6185": Frais de colloques, séminaires, conférences
 
+# Second avis LLM pour les pièces envoyées en revue humaine (jamais d'écriture automatique).
+# Activé seulement si la variable FINML_LLM_API_KEY est définie.
+llm:
+  prompt: prompts/second_avis_v1.md
+  prompt_version: second_avis_v1
+  base_url: https://api.mistral.ai/v1
+  model: mistral-small-latest
+
 data:
   generator: generate.py
   path: data/imputation_comptable.csv
@@ -36,18 +44,37 @@ data:
 metric: accuracy
 min_score: 0.80
 # Sous ce niveau de confiance, la proposition part en revue humaine (a_revoir = true).
+# Remplacé à l'entraînement par le seuil qui garantit la précision cible.
 decision_threshold: 0.6
+cv_folds: 5
+
+# Hypothèses métier : 24 000 pièces d'achat par an, 1,5 minute de saisie manuelle par pièce,
+# et 97 % de précision exigée sur les écritures passées automatiquement.
+# L'historique contient environ 3 % d'erreurs d'imputation : une cible de 98 % n'automatise
+# presque rien, car la précision est mesurée contre ces étiquettes imparfaites.
+business:
+  kind: automation
+  target_precision: 0.97
+  annual_volume: 24000
+  minutes_per_item: 1.5
+
 
 candidates:
+  - name: tfidf_regression_logistique
+    type: tfidf_logreg
+    params: {C: 10.0}
+  - name: tfidf_svm_lineaire
+    type: tfidf_svm
+    params: {C: 1.0}
+  - name: tfidf_naive_bayes
+    type: tfidf_naive_bayes
+    params: {alpha: 0.1}
   - name: recherche_vectorielle_k5
     type: knn_retrieval
     params: {k: 5, embedder: tfidf, embedder_params: {dim: 256}}
   - name: recherche_vectorielle_k15
     type: knn_retrieval
     params: {k: 15, embedder: tfidf, embedder_params: {dim: 256}}
-  - name: tfidf_regression_logistique
-    type: tfidf_logreg
-    params: {C: 10.0}
   # Embeddings sémantiques multilingues : décommenter après `pip install .[embeddings]`.
   # Mesuré sur ces données : accuracy 0.833 (k=5), contre 0.88 pour les n-grammes de caractères.
   # Les libellés bancaires sont courts, bruités et dominés par des noms de fournisseurs :

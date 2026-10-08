@@ -13,46 +13,86 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import skops.io as sio
+from lightgbm import LGBMClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import (
+    ExtraTreesClassifier,
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+)
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import ComplementNB, GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.svm import LinearSVC
 from xgboost import XGBClassifier
 
 from finml.config import Candidate, UseCaseConfig
 from finml.vector import VectorRetrievalClassifier
 
 
-def build_estimator(cfg: UseCaseConfig, cand: Candidate):
+def _tabular_model(cand: Candidate, seed: int):
     p = dict(cand.params)
+    t = cand.type
+    if t == "logistic_regression":
+        return LogisticRegression(max_iter=2000, **p)
+    if t == "naive_bayes":
+        return GaussianNB(**p)
+    if t == "knn":
+        return KNeighborsClassifier(**p)
+    if t == "svm":  # SVM linéaire, probabilités calibrées par validation croisée
+        return CalibratedClassifierCV(LinearSVC(C=p.pop("C", 1.0), random_state=seed), cv=3, **p)
+    if t == "random_forest":
+        return RandomForestClassifier(n_jobs=-1, random_state=seed, **p)
+    if t == "extra_trees":
+        return ExtraTreesClassifier(n_jobs=-1, random_state=seed, **p)
+    if t == "hist_gradient_boosting":
+        return HistGradientBoostingClassifier(random_state=seed, **p)
+    if t == "xgboost":
+        return XGBClassifier(eval_metric="logloss", random_state=seed, n_jobs=-1, **p)
+    if t == "lightgbm":
+        return LGBMClassifier(random_state=seed, n_jobs=-1, verbose=-1, **p)
+    if t == "mlp":
+        return MLPClassifier(random_state=seed, early_stopping=True, max_iter=500, **p)
+    if t == "torch_mlp":
+        from finml.torch_model import TorchMLPClassifier
+
+        if "hidden" in p:
+            p["hidden"] = tuple(p["hidden"])
+        return TorchMLPClassifier(seed=seed, **p)
+    raise ValueError(f"{t} n'est pas un modèle tabulaire")
+
+
+# Modèles qui exigent une matrice dense en entrée.
+DENSE_INPUT = {"naive_bayes", "hist_gradient_boosting", "torch_mlp"}
+
+
+def build_estimator(cfg: UseCaseConfig, cand: Candidate):
     if cfg.task == "tabular_classification":
+        dense = cand.type in DENSE_INPUT
         pre = ColumnTransformer(
             [
                 ("num", StandardScaler(), cfg.features.numeric),
-                ("cat", OneHotEncoder(handle_unknown="ignore"), cfg.features.categorical),
-            ]
+                ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=not dense), cfg.features.categorical),
+            ],
+            sparse_threshold=0.0 if dense else 0.3,
         )
-        if cand.type == "logistic_regression":
-            est = LogisticRegression(max_iter=2000, **p)
-        elif cand.type == "random_forest":
-            est = RandomForestClassifier(n_jobs=-1, random_state=cfg.data.seed, **p)
-        elif cand.type == "xgboost":
-            est = XGBClassifier(eval_metric="logloss", random_state=cfg.data.seed, n_jobs=-1, **p)
-        else:
-            raise ValueError(f"{cand.type} n'est pas un modèle tabulaire")
-        return Pipeline([("pre", pre), ("model", est)])
+        return Pipeline([("pre", pre), ("model", _tabular_model(cand, cfg.data.seed))])
 
+    p = dict(cand.params)
+    tfidf = TfidfVectorizer(analyzer="char_wb", ngram_range=tuple(p.pop("ngram_range", (2, 5))),
+                            strip_accents="unicode", sublinear_tf=True)
     if cand.type == "tfidf_logreg":
-        ngram = tuple(p.pop("ngram_range", (2, 5)))
-        return Pipeline(
-            [
-                ("tfidf", TfidfVectorizer(analyzer="char_wb", ngram_range=ngram, strip_accents="unicode",
-                                          sublinear_tf=True)),
-                ("model", LogisticRegression(max_iter=3000, **p)),
-            ]
-        )
+        return Pipeline([("tfidf", tfidf), ("model", LogisticRegression(max_iter=3000, **p))])
+    if cand.type == "tfidf_svm":
+        svm = CalibratedClassifierCV(LinearSVC(C=p.pop("C", 1.0), random_state=cfg.data.seed), cv=3)
+        return Pipeline([("tfidf", tfidf), ("model", svm)])
+    if cand.type == "tfidf_naive_bayes":
+        return Pipeline([("tfidf", tfidf), ("model", ComplementNB(**p))])
     if cand.type == "knn_retrieval":
         return VectorRetrievalClassifier(**p)
     raise ValueError(f"{cand.type} n'est pas un modèle texte")
@@ -73,6 +113,14 @@ TRUSTED_TYPES = frozenset(
         "sklearn.tree._tree.Tree",
         "xgboost.core.Booster",
         "xgboost.sklearn.XGBClassifier",
+        "lightgbm.basic.Booster",
+        "lightgbm.sklearn.LGBMClassifier",
+        "collections.OrderedDict",
+        "sklearn.calibration._CalibratedClassifier",
+        "sklearn.calibration._SigmoidCalibration",
+        "sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor",
+        "sklearn.neural_network._stochastic_optimizers.AdamOptimizer",
+        "finml.torch_model.TorchMLPClassifier",
         "finml.vector.TfidfEmbedder",
         "finml.vector.SentenceTransformerEmbedder",
         "finml.vector.VectorRetrievalClassifier",

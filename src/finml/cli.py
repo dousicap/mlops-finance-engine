@@ -1,4 +1,4 @@
-"""Ligne de commande : finml list | generate | train | export | run-all | index-pgvector | batch | simulate | drift."""
+"""Ligne de commande : finml list | generate | train | export | run-all | index-pgvector | batch | simulate | drift | llm-eval."""
 
 from __future__ import annotations
 
@@ -44,8 +44,13 @@ def cmd_train(args):
             print(f"ÉCHEC porte qualité - {e}", file=sys.stderr)
             failed = True
             continue
-        detail = ", ".join(f"{k}={v:.3f}" for k, v in r.all_scores.items())
-        print(f"{name} : meilleur={r.best_candidate} {r.metric}={r.score:.3f} -> v{r.version} @{r.alias} [{detail}]")
+        print(f"\n{name} : champion {r.best_candidate}, {r.metric} {r.score:.3f} sur le test -> v{r.version} @{r.alias}")
+        print(f"  {'candidat':<32}{'CV moyenne':>11}{'écart-type':>11}{'test':>8}{'secondes':>10}")
+        for row in r.leaderboard:
+            print(f"  {row['candidat']:<32}{row['cv_moyenne']:>11.3f}{row['cv_ecart_type']:>11.3f}"
+                  f"{row['test']:>8.3f}{row['secondes']:>10.1f}")
+        for k, v in r.business_metrics.items():
+            print(f"  {k:<40}{v:>14,.2f}".replace(",", " "))
     if failed:
         sys.exit(1)
 
@@ -166,6 +171,53 @@ def cmd_batch(args):
     print(f"{len(out)} lignes prédites -> {args.output}")
 
 
+def cmd_llm_eval(args):
+    """Évalue le second avis LLM sur les pièces que le champion envoie en revue humaine."""
+    import json
+
+    import mlflow
+    import numpy as np
+    from sklearn.model_selection import train_test_split
+
+    from finml.data import load_validated
+    from finml.llm import evaluate, make_client
+    from finml.train import default_tracking_uri
+    from finml.vector import VectorRetrievalClassifier
+
+    cfg = load_config(args.usecase)
+    df = load_validated(cfg)
+    X, y = df[cfg.features.text].astype(str), df[cfg.target].astype(str)
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=cfg.test_size, random_state=cfg.data.seed, stratify=y)
+    mlflow.set_tracking_uri(default_tracking_uri())
+    local = Path(args.models_dir) / args.usecase
+    model = mlflow.pyfunc.load_model(str(local) if (local / "MLmodel").exists()
+                                     else f"models:/{cfg.registered_model}@champion")
+    out = model.predict(X_test.to_frame())
+    review = np.where(out["a_revoir"].to_numpy())[0][: args.n]
+    history = VectorRetrievalClassifier(k=5).fit(X_train, y_train)
+    examples = history.explain(X_test.iloc[review].tolist())
+    cases = [{"libelle": X_test.iloc[i], "compte": y_test.iloc[i], "top3": json.loads(out["top3"].iloc[i]),
+              "exemples": ex} for i, ex in zip(review, examples)]
+    client = make_client(cfg, args.provider)
+    mlflow.set_experiment(f"finml-{cfg.name}-llm")
+    with mlflow.start_run(run_name=f"{cfg.llm.prompt_version}-{client.name}"):
+        mlflow.log_params({"prompt_version": cfg.llm.prompt_version, "modele": client.name,
+                           "cas_en_revue": len(cases)})
+        mlflow.log_artifact(str(usecase_dir_path(cfg) / cfg.llm.prompt))
+        metrics = evaluate(cfg, client, cases)
+        mlflow.log_metrics(metrics)
+    print(f"{cfg.name} : {len(cases)} pièces en revue humaine évaluées avec {client.name}")
+    for k, v in metrics.items():
+        print(f"  {k:<28}{v:>10.3f}")
+
+
+def usecase_dir_path(cfg):
+    from finml.config import usecase_dir
+
+    return usecase_dir(cfg.name)
+
+
 def cmd_run_all(args):
     args.usecase = "all"
     cmd_generate(args)
@@ -208,6 +260,13 @@ def main(argv: list[str] | None = None):
     p.add_argument("output")
     p.add_argument("--models-dir", default="models")
     p.set_defaults(func=cmd_batch)
+    p = sub.add_parser("llm-eval")
+    p.add_argument("usecase")
+    p.add_argument("--n", type=int, default=50)
+    p.add_argument("--provider", choices=["auto", "echo"], default="auto",
+                   help="auto : API configurée (clé requise). echo : client hors ligne")
+    p.add_argument("--models-dir", default="models")
+    p.set_defaults(func=cmd_llm_eval)
     p = sub.add_parser("drift")
     p.add_argument("usecase")
     p.add_argument("--production", help="journal JSONL (défaut : <log-dir>/<cas>.jsonl)")

@@ -41,6 +41,7 @@ def export_champion(name: str, out_dir: Path) -> Path:
         "candidate": run.info.run_name,
         "metric": cfg.metric,
         "score": run.data.metrics.get(cfg.metric),
+        "metier": {k: v for k, v in run.data.metrics.items() if k.startswith("metier_")},
         "data_sha256": parent.data.tags.get("data_sha256"),
         "git_sha": parent.data.tags.get("git_sha"),
     }

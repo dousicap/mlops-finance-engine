@@ -1,86 +1,181 @@
-# finml : un socle MLOps, des cas d'usage financiers
+# finml : automatiser des décisions financières avec MLOps et LLMOps
 
-Moteur de machine learning industrialisé une seule fois, réutilisé pour chaque nouveau cas d'usage.
-Un cas d'usage se déclare dans un dossier (configuration + données). Le moteur se charge du reste :
-contrôle qualité des données, entraînement de plusieurs modèles, suivi MLflow, sélection du meilleur,
-promotion dans le Registry, API, conteneur, déploiement sur AWS, puis surveillance en production
-(métriques, journal des prédictions, détection de dérive).
+Moteur de machine learning industrialisé une seule fois, réutilisé pour chaque décision métier à
+automatiser dans une direction financière ou un cabinet comptable. Chaque cas d'usage part d'une
+spec (décision, valeur, critères d'acceptation), se déclare dans un dossier (configuration +
+données), et le moteur fait le reste :
 
-L'effort se concentre ainsi sur ce qui crée de la valeur : les données du client et son cas métier.
+1. contrôle qualité des données (contrat déclaré) ;
+2. tournoi de modèles en validation croisée, du plus simple au réseau de neurones ;
+3. calibrage du seuil de décision sur la valeur métier (euros, heures), pas sur un score ;
+4. suivi MLflow, porte qualité, promotion champion / challenger dans le Registry ;
+5. API, conteneur, déploiement AWS (ECS) ou Kubernetes ;
+6. surveillance : métriques, journal des prédictions, dérive, alertes ;
+7. second avis LLM tracé et évalué pour les cas que le modèle ne tranche pas.
 
-> Les données sont fictives et générées par code. Les scores mesurent la chaîne, pas une performance
-> métier réelle. Brancher un vrai jeu de données revient à remplacer le générateur par un CSV.
+> Les données sont fictives et générées par code, avec du bruit réaliste (3 % d'erreurs
+> d'étiquetage, libellés abrégés). Les chiffres démontrent la chaîne et la méthode, pas une
+> performance client. Brancher un vrai historique revient à remplacer le générateur par un CSV.
 
 ## Cas d'usage livrés
 
-| Cas d'usage | Question métier | Type | Meilleur modèle | Score (jeu de test) |
+| Cas d'usage | Décision automatisée | Champion | Score test | Valeur métier mesurée |
 |---|---|---|---|---|
-| `retard_paiement` | Cette facture client sera-t-elle payée en retard ? | Tabulaire | Régression logistique | ROC AUC 0,741 |
-| `imputation_comptable` | Sur quel compte du PCG imputer ce libellé de pièce ? | Texte | Recherche vectorielle k=15 | Accuracy 0,889, top-3 0,935 |
+| `retard_paiement` | Quelles factures relancer avant échéance ? | Régression logistique | ROC AUC 0,741 | 11 025 € par an économisés sur 8 000 factures |
+| `imputation_comptable` | Sur quel compte du PCG passer cette pièce d'achat ? | TF-IDF + naive Bayes | Exactitude 0,885, top-3 0,937 | 85 % des pièces passées seules à 97 % de précision, 508 h par an |
 
-Comparaison des candidats, enregistrée automatiquement dans MLflow :
+Chaque cas a sa spec dans [`docs/specs/`](docs/specs) : décision, hypothèses de valeur, données,
+modèles, critères d'acceptation, exploitation, risques. Le gabarit est
+[`docs/specs/_modele.md`](docs/specs/_modele.md).
 
-| Cas d'usage | Candidat | Score |
-|---|---|---|
-| retard_paiement | Régression logistique | **0,741** |
-| | Random forest | 0,732 |
-| | XGBoost | 0,725 |
-| imputation_comptable | Recherche vectorielle k=15 (TF-IDF réduit à 256 dimensions) | **0,889** |
-| | Recherche vectorielle k=5 | 0,888 |
-| | TF-IDF + régression logistique | 0,888 |
-| | Embeddings sémantiques MiniLM multilingue, k=5 (mesure séparée) | 0,833 |
+## Tournoi de modèles
 
-Deux constats utiles :
-- Sur un signal surtout linéaire, la régression logistique bat XGBoost. Le moteur choisit sur la mesure, pas sur la réputation du modèle.
-- Sur des libellés bancaires courts et bruités, les n-grammes de caractères battent les embeddings sémantiques : les noms de fournisseurs et les fautes de frappe comptent plus que le sens.
-- À score égal, la recherche vectorielle a un avantage métier : chaque proposition est justifiée par les écritures passées les plus proches (`exemples_proches`), que le comptable peut vérifier.
+Tous les candidats déclarés passent la même validation croisée stratifiée à 5 plis. Le champion
+est choisi sur la moyenne de CV, puis mesuré une seule fois sur un jeu de test tenu à l'écart.
+Le classement complet est enregistré dans MLflow (`classement.csv`) et affiché par `finml train`.
+
+**retard_paiement** (ROC AUC, 11 candidats)
+
+| Candidat | CV moyenne | Écart-type | Test |
+|---|---|---|---|
+| **Régression logistique** | **0,736** | 0,011 | **0,741** |
+| SVM linéaire calibré | 0,736 | 0,011 | 0,740 |
+| Réseau de neurones PyTorch (servi en ONNX) | 0,732 | 0,009 | 0,735 |
+| Random forest | 0,729 | 0,009 | 0,732 |
+| Réseau de neurones scikit-learn | 0,725 | 0,020 | 0,731 |
+| Extra trees | 0,724 | 0,006 | 0,736 |
+| XGBoost | 0,722 | 0,011 | 0,725 |
+| Gradient boosting histogramme | 0,720 | 0,009 | 0,726 |
+| LightGBM | 0,717 | 0,011 | 0,720 |
+| Naive Bayes | 0,706 | 0,017 | 0,719 |
+| k plus proches voisins | 0,702 | 0,006 | 0,692 |
+
+**imputation_comptable** (exactitude, 5 candidats)
+
+| Candidat | CV moyenne | Écart-type | Test |
+|---|---|---|---|
+| **TF-IDF n-grammes de caractères + naive Bayes** | **0,905** | 0,009 | **0,885** |
+| TF-IDF + SVM linéaire calibré | 0,904 | 0,010 | 0,885 |
+| Recherche vectorielle k=15 (TF-IDF réduit à 256 dimensions) | 0,904 | 0,006 | 0,889 |
+| TF-IDF + régression logistique | 0,901 | 0,012 | 0,888 |
+| Recherche vectorielle k=5 | 0,897 | 0,010 | 0,888 |
+
+Ce que le tournoi montre :
+- Le signal du retard de paiement est surtout linéaire : la régression logistique bat les arbres
+  boostés et le réseau PyTorch. Le moteur choisit sur la mesure, pas sur la réputation du modèle,
+  et garde le modèle le plus simple à expliquer à un DAF.
+- Les écarts entre les cinq premiers sont inférieurs à un écart-type de CV : ils sont à égalité.
+  C'est pourquoi la sélection se fait sur la CV et non sur le test, qui ne sert qu'à confirmer.
+- Sur des libellés bancaires courts et bruités, les n-grammes de caractères battent des embeddings
+  sémantiques multilingues (0,83, mesure séparée) : noms de fournisseurs et fautes de frappe
+  comptent plus que le sens.
+- Le réseau PyTorch est entraîné avec arrêt précoce, exporté en ONNX et servi par onnxruntime :
+  pas de dépendance PyTorch dans l'image de production. Sans PyTorch installé, ce candidat est
+  ignoré proprement et tracé (`candidats_ignores`).
+
+## De la prédiction à la décision : couche métier
+
+Un score ne dit pas quoi faire. Chaque configuration déclare un bloc `business`, et le moteur
+calibre le seuil servi sur les prédictions hors échantillon de la validation croisée.
+
+**Coût (`kind: cost`, retard_paiement).** Relancer une facture coûte 15 € (temps du chargé de
+recouvrement), un retard non anticipé en coûte 40 € (BFR, agios, relances tardives). Le seuil
+retenu minimise le coût attendu et se compare aux deux politiques sans modèle (relancer tout le
+monde, ne relancer personne).
+
+| Seuil | Factures signalées | Retards captés | Coût par facture | Sans modèle | Économie annuelle |
+|---|---|---|---|---|---|
+| 0,32 | 60 % | 79 % | 7,54 € | 8,92 € | 11 025 € |
+
+Point d'entretien : avec 80 € / 4 €, l'économie devenait négative, car relancer tout le monde
+coûtait moins cher que le modèle. Le modèle ne crée de la valeur que si une relance coûte plus
+d'environ un quart d'un retard. Cette analyse de sensibilité est à faire avec le métier avant
+tout développement.
+
+**Automatisation (`kind: automation`, imputation_comptable).** Le seuil est la confiance la plus
+basse qui garde 97 % de précision sur les écritures passées automatiquement. Résultat : 85 % des
+24 000 pièces annuelles passées sans intervention, soit 508 heures économisées à 1,5 minute par
+pièce. Une cible de 98 % n'automatisait que 3 % des pièces : l'historique contient environ 3 %
+d'erreurs d'étiquetage, et nettoyer cet historique est le premier levier de gain.
+
+Les métriques `metier_*` sont tracées dans MLflow et embarquées dans `manifest.json`.
+
+## Second avis LLM (LLMOps)
+
+Les 15 % de pièces sous le seuil partent en revue chez le comptable. Pour elles, un LLM propose
+un second avis justifié. Il ne passe jamais d'écriture.
+
+| Exigence | Mise en œuvre |
+|---|---|
+| Fournisseur interchangeable | API compatible OpenAI (Mistral par défaut, hébergement européen ; vLLM, Ollama ou OpenAI par configuration) |
+| Prompt versionné | `usecases/imputation_comptable/prompts/second_avis_v1.md`, version tracée à chaque appel |
+| Contexte récupéré | top 3 du modèle et écritures passées les plus proches (recherche vectorielle) |
+| Garde-fous | température 0, sortie JSON validée par Pydantic, compte obligatoirement dans la liste autorisée, consigne d'ignorer toute instruction contenue dans le libellé |
+| Résilience | une panne ou un délai dépassé chez le fournisseur ne bloque pas la revue (`appel_en_echec`) |
+| Observabilité | trace MLflow par appel : prompt, modèle, tokens, latence, coût ; compteur Prometheus `finml_llm_second_avis_total` par résultat |
+| Évaluation | `finml llm-eval` compare, sur les pièces en revue, l'exactitude du LLM à celle du modèle seul ; un nouveau prompt n'est adopté que s'il fait mieux |
+| Désactivation propre | sans clé d'API, `/second-avis` répond 503 et le reste du service fonctionne |
+
+```bash
+export FINML_LLM_API_KEY=...            # clé Mistral (ou autre fournisseur configuré)
+finml llm-eval imputation_comptable --n 50
+finml llm-eval imputation_comptable --provider echo   # hors ligne, sans clé (CI)
+```
+
+Les tests couvrent la chaîne hors ligne (client `echo`) : garde-fous, panne, traces, endpoint.
+Aucun appel à un vrai fournisseur n'a été mesuré dans ce dépôt.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
+    S[docs/specs<br/>décision, valeur, critères] --> Cas
     subgraph Cas["usecases/&lt;cas&gt;/"]
         C[config.yaml] --- G[generate.py ou CSV]
+        C --- PR[prompts/]
     end
-    Cas --> Q[Contrôle qualité<br/>schéma, bornes, modalités]
-    Q --> T[Entraînement<br/>N candidats]
-    T --> M[(MLflow<br/>runs, métriques, artefacts)]
+    Cas --> Q[Contrôle qualité<br/>contrat de données]
+    Q --> T[Tournoi<br/>CV 5 plis, N candidats]
+    T --> B[Seuil métier<br/>coût ou automatisation]
+    B --> M[(MLflow<br/>runs, classement, metier_*)]
     M --> P{Porte qualité<br/>min_score}
     P -- échec --> X[CI en échec<br/>rien n'est déployé]
-    P -- succès --> R[(Registry<br/>alias champion / challenger)]
+    P -- succès --> R[(Registry<br/>champion / challenger)]
     R --> E[Export du champion<br/>+ manifest.json]
     E --> D[Image Docker]
-    D --> ECR[(ECR)] --> ECS[ECS Fargate<br/>derrière un ALB]
-    ECS --> J[Journal des prédictions<br/>stdout -> CloudWatch]
-    ECS --> PM[/metrics Prometheus/]
-    J --> DR{finml drift<br/>KS + PSI}
-    DR -- dérive --> A[Alerte, réentraînement]
+    D --> ECS[ECS Fargate ou Kubernetes]
+    ECS --> API[/predict<br/>/second-avis/]
+    API --> LLM[LLM compatible OpenAI<br/>traces MLflow]
+    ECS --> J[Journal des prédictions] --> DR{finml drift<br/>KS + PSI}
+    ECS --> PM[/metrics Prometheus/] --> AL[Alertes Grafana]
+    DR -- dérive --> RT[Réentraînement]
 ```
 
 Chaîne de déploiement (`.github/workflows/deploy.yml`), à chaque push sur `main` :
 
 1. lint et tests (`ruff`, `pytest`) ;
-2. génération des données, entraînement, porte qualité, export des champions ;
-3. authentification AWS par OIDC, sans clé stockée dans GitHub ;
+2. génération des données, tournoi, seuil métier, porte qualité, export des champions ;
+3. authentification AWS par OIDC, sans clé stockée dans GitHub (étape sautée tant que
+   `AWS_DEPLOY_ROLE_ARN` n'est pas défini) ;
 4. build de l'image, tag = SHA du commit (tags immuables dans ECR) ;
-5. nouvelle révision de la définition de tâche, déploiement ECS, attente de la stabilité.
-   Si les health checks échouent, le circuit breaker ECS revient à la version précédente.
+5. déploiement ECS rolling ou blue/green, retour arrière automatique.
 
 ## Démarrage rapide
 
 ```bash
-uv venv && source .venv/bin/activate
-uv pip install -e ".[dev]"
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+pip install -e ".[torch]" --extra-index-url https://download.pytorch.org/whl/cpu   # optionnel
 
 finml list                  # cas d'usage déclarés
-finml run-all               # données -> entraînement -> Registry -> export dans models/
-pytest                      # 21 tests, environ 50 s
+finml run-all               # données -> tournoi -> Registry -> export dans models/
+pytest                      # 37 tests
 
-uvicorn finml.api:app --port 8000   # http://localhost:8000/docs
-mlflow ui --backend-store-uri sqlite:///mlflow.db   # http://localhost:5000
+uvicorn finml.api:app --port 8000                     # http://localhost:8000/docs
+mlflow ui --backend-store-uri sqlite:///mlflow.db     # http://localhost:5000
 ```
 
-Exemple d'appel :
+Pièce passée automatiquement :
 
 ```bash
 curl -s localhost:8000/predict/imputation_comptable -H 'content-type: application/json' \
@@ -88,15 +183,24 @@ curl -s localhost:8000/predict/imputation_comptable -H 'content-type: applicatio
 ```
 
 ```json
-{"usecase": "imputation_comptable", "modele_version": 1, "latence_ms": 9.1,
- "predictions": [{"compte": "6251", "intitule": "Voyages et déplacements", "confiance": 1.0,
-                  "a_revoir": false, "top3": [...],
-                  "exemples_proches": [{"libelle": "FAC N° Hotel du Parc nuitee hotel MARS",
-                                        "compte": "6251", "similarite": 0.946}, ...]}]}
+{"compte": "6251", "intitule": "Voyages et déplacements", "confiance": 0.9997, "a_revoir": false,
+ "top3": [{"compte": "6251", "score": 0.9997}, {"compte": "6257", "score": 0.0001}, ...]}
 ```
 
-`a_revoir` passe à `true` sous le seuil de confiance déclaré (`decision_threshold`) :
-la proposition part alors en revue humaine.
+Pièce envoyée en revue, avec second avis :
+
+```bash
+curl -s localhost:8000/second-avis/imputation_comptable -H 'content-type: application/json' \
+  -d '{"libelle":"PRLV SEPA TeleCom One 4521"}'
+```
+
+```json
+{"modele": {"compte": "626", "intitule": "Frais postaux et de télécommunications",
+            "confiance": 0.4086, "a_revoir": true,
+            "top3": [{"compte": "626", "score": 0.4086}, {"compte": "6135", "score": 0.1154}, ...]},
+ "second_avis": {"compte": "...", "confiance": "moyenne", "justification": "...", "valide": true,
+                 "prompt_version": "second_avis_v1", "latence_ms": ..., "cout_eur": ...}}
+```
 
 Prédiction par lots, avec le même contrat de données que l'API :
 
@@ -108,24 +212,29 @@ Avec Docker (serveur MLflow, pgvector et API) : voir l'en-tête de `docker-compo
 
 ## Ajouter un cas d'usage
 
-1. Créer `usecases/<nom>/config.yaml` : cible, variables, contrat de données, métrique, seuil minimal, candidats.
-2. Fournir les données : un `generate.py` exposant `generate(n_rows, seed)`, ou un CSV à l'emplacement `data.path`.
-3. `finml run-all`. L'API expose automatiquement `POST /predict/<nom>`.
+1. Écrire la spec à partir de `docs/specs/_modele.md` : décision, valeur, critères d'acceptation.
+2. Créer `usecases/<nom>/config.yaml` : cible, variables, contrat de données, métrique, seuil
+   minimal, candidats, bloc `business`, bloc `llm` optionnel.
+3. Fournir les données : un `generate.py` exposant `generate(n_rows, seed)`, ou un CSV.
+4. `finml run-all`. L'API expose automatiquement `POST /predict/<nom>`.
 
-Aucune ligne du moteur ne change. Les cas candidats suivants s'ajoutent de cette façon : détection de
-fraude sur transactions, défaut de crédit, prévision de trésorerie.
+Aucune ligne du moteur ne change. Cas suivants prévus de cette façon : détection de fraude sur
+notes de frais, défaut de crédit client, prévision de trésorerie, rapprochement bancaire.
 
 ## Ce que le moteur garantit
 
 | Garantie | Mécanisme |
 |---|---|
 | Données conformes | Contrat déclaré dans la configuration, vérifié à l'entraînement **et** à chaque appel API (422 sinon) |
+| Choix de modèle robuste | Tournoi en validation croisée, test tenu à l'écart, classement archivé |
+| Seuil justifié | Calibré sur la valeur métier déclarée, comparé aux politiques sans modèle |
 | Traçabilité | Empreinte SHA-256 des données, SHA Git, paramètres et métriques de chaque candidat dans MLflow |
 | Pas de régression | Un nouveau modèle ne devient `champion` que s'il bat l'actuel, sinon il reste `challenger` |
 | Pas de modèle faible en production | Porte qualité `min_score` : la CI échoue, rien n'est déployé |
 | Pas de trafic vers un conteneur inutilisable | `/health` renvoie 503 tant qu'un modèle attendu n'est pas chargé |
 | Image reproductible | Modèles champions embarqués, version servie lisible dans `manifest.json` et `/usecases` |
-| Aucun pickle sur le chemin de service | Estimateurs sérialisés avec skops, rechargés seulement si chaque type figure dans une liste blanche. Enveloppe MLflow chargée depuis son code source (« models from code », MLflow 3) |
+| Aucun pickle sur le chemin de service | Estimateurs sérialisés avec skops, rechargés seulement si chaque type figure dans une liste blanche, vérifiée par un test sur tous les candidats. Réseau PyTorch servi en ONNX. Enveloppe MLflow « models from code » |
+| LLM sous contrôle | Prompt versionné, sortie validée, coût et latence tracés, jamais de décision automatique |
 | Dérive détectée | Journal de chaque prédiction, comparaison à l'échantillon de référence embarqué avec le modèle |
 
 ## Surveillance en production
@@ -261,20 +370,41 @@ Pour activer le blue/green : `deployment_strategy = "blue_green"` dans `terrafor
 variable de dépôt GitHub `DEPLOYMENT_STRATEGY = blue_green`. Le workflow passe alors par CodeDeploy
 avec `appspec.yaml`.
 
+## Ce qui a changé en MLOps et LLMOps, et où le dépôt y répond
+
+| Tendance du marché (2025-2026) | Réponse dans finml |
+|---|---|
+| La valeur métier prime sur le score | Bloc `business`, seuil calibré en euros ou en heures, spec par cas d'usage |
+| Spec-driven development, souvent avec un assistant IA | `docs/specs/` : critères d'acceptation écrits avant le code, vérifiés par les tests |
+| MLflow 3 unifie ML classique et GenAI | Même serveur pour runs, Registry, traces LLM et évaluations de prompts |
+| Prompts traités comme du code | Fichier versionné, version tracée, évaluation avant adoption |
+| Observabilité LLM (tokens, coût, latence) | Spans MLflow et compteur Prometheus par résultat |
+| Souveraineté et AI Act | Fournisseur européen par défaut, humain dans la boucle, journal des décisions |
+| Sécurité de la chaîne ML | Pas de pickle (skops, ONNX), OIDC sans clé, images non root, pods « restricted » |
+| Portabilité des modèles de deep learning | Entraînement PyTorch, service ONNX Runtime |
+
 ## Limites connues et suites
 
-- Données fictives : les scores ne valent pas performance métier.
-- Le Registry MLflow vit dans la CI (SQLite archivé comme artefact). Étape suivante : un serveur MLflow partagé, adossé à RDS et S3.
-- Image de 1,5 Go, dont l'essentiel vient de MLflow. Piste : `mlflow-skinny` pour le service.
-- La détection de dérive tourne à la demande. Étape suivante : un job planifié (EventBridge) qui exporte le journal CloudWatch, lance `finml drift` et déclenche le pipeline d'entraînement sur alerte.
-- La dérive de concept n'est suivie qu'à travers les sorties du modèle. Le vrai signal arrive avec les étiquettes réelles (date de paiement effective, compte corrigé par le comptable), à rapprocher des prédictions journalisées.
+- Données fictives : les chiffres valent démonstration de méthode, pas performance client.
+- Second avis LLM testé hors ligne seulement (client `echo`). À mesurer avec une vraie clé
+  avant de citer un gain.
+- Kubernetes validé par rendu, schéma et lint, jamais déployé sur un vrai cluster. Terraform
+  validé, `terraform apply` jamais exécuté.
+- Le Registry MLflow vit dans la CI (SQLite archivé comme artefact). Étape suivante : un serveur
+  MLflow partagé, adossé à RDS et S3.
+- La détection de dérive tourne à la demande. Étape suivante : un job planifié qui lance
+  `finml drift` et déclenche le réentraînement sur alerte.
+- Le vrai signal de dérive de concept arrive avec les étiquettes réelles (date de paiement
+  effective, compte corrigé par le comptable), à rapprocher des prédictions journalisées.
 
 ## Structure
 
 ```
-src/finml/         moteur : config, data, models, vector, train, export, api, monitoring, cli
-usecases/          un dossier par cas d'usage : config.yaml + generate.py
-tests/             tests unitaires et bout en bout (génération -> API)
+docs/specs/        une spec par cas d'usage + gabarit
+src/finml/         moteur : config, data, models, torch_model, vector, train, business,
+                   export, api, llm, monitoring, cli
+usecases/          un dossier par cas d'usage : config.yaml, generate.py, prompts/
+tests/             unitaires et bout en bout (génération -> tournoi -> API -> LLM hors ligne)
 infra/terraform/   infrastructure AWS (ECS, rolling ou blue/green CodeDeploy)
 deploy/k8s/        manifestes Kubernetes (Kustomize, base + overlay prod)
 deploy/monitoring/ Prometheus, alertes et leurs tests, Grafana
@@ -283,6 +413,7 @@ deploy/monitoring/ Prometheus, alertes et leurs tests, Grafana
 
 ## Stack
 
-Python 3.12, scikit-learn, XGBoost, MLflow 3 (tracking, Registry, alias, models from code), skops,
-FastAPI, Prometheus, Grafana, SciPy (KS), pgvector, Docker, Kubernetes (Kustomize), GitHub Actions (OIDC),
+Python 3.12, scikit-learn, XGBoost, LightGBM, PyTorch, ONNX Runtime, MLflow 3 (tracking, Registry,
+alias, models from code, tracing), skops, FastAPI, Pydantic, API LLM compatible OpenAI (Mistral),
+Prometheus, Grafana, SciPy, pgvector, Docker, Kubernetes (Kustomize), GitHub Actions (OIDC),
 Terraform, AWS (ECS Fargate, CodeDeploy, ALB, ECR, CloudWatch, IAM, Secrets Manager).

@@ -45,8 +45,33 @@ class Candidate(BaseModel):
     """Un modèle candidat. Le moteur entraîne tous les candidats et garde le meilleur."""
 
     name: str
-    type: Literal["logistic_regression", "random_forest", "xgboost", "knn_retrieval", "tfidf_logreg"]
+    type: Literal[
+        # tabulaire
+        "logistic_regression", "naive_bayes", "knn", "svm", "random_forest", "extra_trees",
+        "hist_gradient_boosting", "xgboost", "lightgbm", "mlp", "torch_mlp",
+        # texte
+        "tfidf_logreg", "tfidf_svm", "tfidf_naive_bayes", "knn_retrieval",
+    ]
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class CostBusiness(BaseModel):
+    """Classification binaire : le seuil de décision minimise le coût métier attendu."""
+
+    kind: Literal["cost"]
+    cost_false_negative: float = Field(gt=0, description="Coût d'un cas positif non détecté")
+    cost_false_positive: float = Field(ge=0, description="Coût d'une action déclenchée à tort")
+    annual_volume: int = Field(gt=0, description="Nombre de cas traités par an")
+    unit: str = "EUR"
+
+
+class AutomationBusiness(BaseModel):
+    """Classification multi-classes : seuil de confiance qui garantit une précision cible."""
+
+    kind: Literal["automation"]
+    target_precision: float = Field(gt=0, le=1)
+    annual_volume: int = Field(gt=0)
+    minutes_per_item: float = Field(gt=0, description="Temps de traitement manuel d'un élément")
 
 
 class DataConfig(BaseModel):
@@ -54,6 +79,25 @@ class DataConfig(BaseModel):
     path: str  # CSV relatif à la racine du dépôt
     n_rows: int = 5000
     seed: int = 42
+
+
+class LLMConfig(BaseModel):
+    """Second avis par LLM sur les cas envoyés en revue humaine (cas d'usage texte).
+
+    Le LLM ne décide jamais : sa proposition est montrée au comptable, avec sa justification.
+    Toute API compatible OpenAI convient. Mistral par défaut, pour un hébergement européen.
+    """
+
+    prompt: str  # chemin du prompt versionné, relatif au dossier du cas d'usage
+    prompt_version: str
+    base_url: str = "https://api.mistral.ai/v1"
+    model: str = "mistral-small-latest"
+    api_key_env: str = "FINML_LLM_API_KEY"
+    temperature: float = 0.0
+    timeout_seconds: float = 20.0
+    # Tarifs en EUR par million de tokens : à renseigner avec la grille du fournisseur retenu.
+    price_input_per_mtok: float = 0.0
+    price_output_per_mtok: float = 0.0
 
 
 class UseCaseConfig(BaseModel):
@@ -70,8 +114,11 @@ class UseCaseConfig(BaseModel):
     min_score: float = Field(ge=0, le=1)
     test_size: float = 0.2
     candidates: list[Candidate]
-    decision_threshold: float = 0.5
+    decision_threshold: float = 0.5  # recalculé à l'entraînement quand un bloc business existe
     labels: dict[str, str] = Field(default_factory=dict)  # libellés lisibles des classes
+    cv_folds: int = Field(default=5, ge=2, le=10)  # validation croisée pour départager les candidats
+    business: CostBusiness | AutomationBusiness | None = Field(default=None, discriminator="kind")
+    llm: LLMConfig | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -83,6 +130,14 @@ class UseCaseConfig(BaseModel):
             raise ValueError("La cible ne peut pas être une variable d'entrée")
         if not self.candidates:
             raise ValueError("Au moins un modèle candidat est requis")
+        if len({c.name for c in self.candidates}) != len(self.candidates):
+            raise ValueError("Deux candidats portent le même nom")
+        if self.business and self.business.kind == "cost" and self.task != "tabular_classification":
+            raise ValueError("Le bloc business « cost » s'applique à une classification binaire tabulaire")
+        if self.llm and self.task != "text_classification":
+            raise ValueError("Le second avis LLM s'applique aux cas d'usage texte")
+        if self.business and self.business.kind == "automation" and self.task != "text_classification":
+            raise ValueError("Le bloc business « automation » s'applique à une classification multi-classes")
         return self
 
 

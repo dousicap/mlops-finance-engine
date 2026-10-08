@@ -43,7 +43,8 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -e .
+      # PyTorch en version CPU pour que le réseau de neurones participe au tournoi.
+      - run: pip install -e ".[torch]" --extra-index-url https://download.pytorch.org/whl/cpu
       # Échoue si un modèle n'atteint pas son min_score : rien n'est déployé.
       - run: finml run-all --out models
       - name: Résumé des modèles

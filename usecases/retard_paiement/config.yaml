@@ -41,15 +41,53 @@ data:
 
 metric: roc_auc
 min_score: 0.70
-decision_threshold: 0.5
+decision_threshold: 0.5   # remplacé à l'entraînement par le seuil qui minimise le coût
+cv_folds: 5
 
+# Hypothèses métier (à remplacer par les chiffres du client) :
+# - un retard non anticipé coûte 40 EUR : financement de 45 jours de besoin de trésorerie,
+#   relance tardive manuelle, part de risque d'impayé ;
+# - une relance préventive coûte 15 EUR : environ 15 minutes d'un chargé de recouvrement ;
+# - 8 000 factures émises par an.
+# Mesuré : le modèle ne crée de valeur que si une relance coûte plus d'environ un quart d'un
+# retard. En dessous, relancer toutes les factures reste la meilleure politique.
+business:
+  kind: cost
+  cost_false_negative: 40
+  cost_false_positive: 15
+  annual_volume: 8000
+
+# Tournoi : chaque candidat passe une validation croisée à 5 plis, le meilleur en moyenne gagne.
 candidates:
   - name: regression_logistique
     type: logistic_regression
     params: {C: 1.0}
+  - name: naive_bayes
+    type: naive_bayes
+  - name: k_plus_proches_voisins
+    type: knn
+    params: {n_neighbors: 25}
+  - name: svm_lineaire
+    type: svm
+    params: {C: 0.5}
   - name: random_forest
     type: random_forest
     params: {n_estimators: 300, max_depth: 10, min_samples_leaf: 5}
+  - name: extra_trees
+    type: extra_trees
+    params: {n_estimators: 300, max_depth: 12, min_samples_leaf: 5}
+  - name: gradient_boosting_histogramme
+    type: hist_gradient_boosting
+    params: {max_iter: 300, learning_rate: 0.05, max_depth: 4}
   - name: xgboost
     type: xgboost
     params: {n_estimators: 400, max_depth: 4, learning_rate: 0.05, subsample: 0.8, colsample_bytree: 0.8}
+  - name: lightgbm
+    type: lightgbm
+    params: {n_estimators: 400, num_leaves: 15, learning_rate: 0.05, subsample: 0.8, subsample_freq: 1}
+  - name: reseau_neurones_sklearn
+    type: mlp
+    params: {hidden_layer_sizes: [64, 32], alpha: 0.001}
+  - name: reseau_neurones_pytorch
+    type: torch_mlp
+    params: {hidden: [64, 32], dropout: 0.2, epochs: 60}

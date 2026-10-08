@@ -1,6 +1,6 @@
 [project]
 name = "finml"
-version = "0.3.0"
+version = "0.4.0"
 description = "Socle MLOps réutilisable pour cas d'usage financiers : un moteur, des cas d'usage déclarés en configuration."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -12,6 +12,8 @@ dependencies = [
     "sqlalchemy>=2.0,<2.1",
     "scikit-learn==1.6.1",
     "xgboost-cpu==2.1.4",
+    "lightgbm>=4.5,<5",
+    "onnxruntime>=1.20,<2",
     "pandas==2.2.3",
     "numpy>=1.26,<2.3",
     "pyyaml>=6.0",
@@ -21,6 +23,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Entraînement du réseau PyTorch (le service n'en a pas besoin : le réseau est exporté en ONNX).
+torch = ["torch>=2.4,<3", "onnx>=1.16"]
 pgvector = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 embeddings = ["sentence-transformers>=3.0"]
 dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6"]

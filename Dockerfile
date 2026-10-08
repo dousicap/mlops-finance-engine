@@ -17,6 +17,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FINML_MODELS_DIR=/app/models \
     MLFLOW_TRACKING_URI=sqlite:////tmp/mlflow.db
 WORKDIR /app
+# libgomp : bibliothèque OpenMP requise par LightGBM à l'import.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /install /usr/local
 COPY usecases ./usecases
 COPY models ./models

@@ -43,7 +43,12 @@ SCORES = Histogram(
     "finml_prediction_score", "Distribution du score de sortie (probabilité ou confiance)", ["usecase"],
     buckets=[i / 10 for i in range(1, 11)],
 )
+LLM_CALLS = Counter("finml_llm_second_avis_total", "Appels au second avis LLM", ["usecase", "resultat"])
 MODEL_INFO = Gauge("finml_model_info", "Version du modèle servi", ["usecase", "version", "candidat"])
+
+
+class SecondAvisRequest(BaseModel):
+    libelle: str = Field(min_length=1, max_length=500)
 
 
 class PredictRequest(BaseModel):
@@ -162,6 +167,30 @@ def create_app(models_dir: str | Path | None = None, usecases: list[str] | None 
             "latence_ms": round(latency * 1000, 1),
             "predictions": records,
         }
+
+    @app.post("/second-avis/{usecase}")
+    def second_avis_endpoint(usecase: str, req: SecondAvisRequest):
+        """Proposition du modèle, complétée par un second avis LLM si la pièce part en revue."""
+        from finml.llm import LLMNotConfigured, make_client, second_avis
+
+        if usecase not in registry:
+            raise HTTPException(404, f"Cas d'usage inconnu ou non chargé : {usecase}")
+        m = registry[usecase]
+        if m.cfg.task != "text_classification":
+            raise HTTPException(400, "Second avis réservé aux cas d'usage texte")
+        try:
+            client = make_client(m.cfg, os.environ.get("FINML_LLM_PROVIDER", "auto"))
+        except LLMNotConfigured as e:
+            raise HTTPException(503, str(e)) from e
+        out = m.model.predict(pd.DataFrame({m.cfg.features.text: [req.libelle]})).iloc[0].to_dict()
+        top3, exemples = json.loads(out["top3"]), json.loads(out["exemples_proches"])
+        avis = None
+        if out["a_revoir"]:
+            result = second_avis(m.cfg, client, req.libelle, top3, exemples)
+            avis = result.to_dict()
+            LLM_CALLS.labels(usecase, "valide" if result.valide else (result.rejet or "rejet")).inc()
+        return {"usecase": usecase, "modele": {**out, "top3": top3, "exemples_proches": exemples},
+                "second_avis": avis}
 
     return app
 
