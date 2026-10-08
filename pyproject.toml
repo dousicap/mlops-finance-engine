@@ -1,0 +1,44 @@
+[project]
+name = "finml"
+version = "0.3.0"
+description = "Socle MLOps réutilisable pour cas d'usage financiers : un moteur, des cas d'usage déclarés en configuration."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mlflow==3.15.1",
+    "skops>=0.14,<0.17",
+    "prometheus-client>=0.21",
+    "scipy>=1.13",
+    "sqlalchemy>=2.0,<2.1",
+    "scikit-learn==1.6.1",
+    "xgboost-cpu==2.1.4",
+    "pandas==2.2.3",
+    "numpy>=1.26,<2.3",
+    "pyyaml>=6.0",
+    "pydantic>=2.7,<3",
+    "fastapi==0.115.12",
+    "uvicorn[standard]==0.34.2",
+]
+
+[project.optional-dependencies]
+pgvector = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
+embeddings = ["sentence-transformers>=3.0"]
+dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6"]
+
+[project.scripts]
+finml = "finml.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

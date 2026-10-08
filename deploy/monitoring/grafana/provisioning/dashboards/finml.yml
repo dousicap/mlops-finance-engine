@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: finml
+    folder: finml
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

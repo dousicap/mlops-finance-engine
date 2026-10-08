@@ -1,0 +1,10 @@
+# Pendant une maintenance de nœud, au moins un pod reste en service.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: finml-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: finml-api

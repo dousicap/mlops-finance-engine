@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# Artefacts produits par le pipeline : régénérés par `finml run-all`, jamais versionnés.
+data/
+models/
+mlflow.db
+mlruns/
+mlartifacts/
+logs/
+reports/
+# Secrets
+.env
+*.env
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/*.tfstate*
+infra/terraform/*.tfvars
+!infra/terraform/example.tfvars

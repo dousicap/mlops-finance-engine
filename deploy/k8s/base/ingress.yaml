@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: finml-api
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [finml.example.com]
+      secretName: finml-api-tls
+  rules:
+    - host: finml.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: finml-api
+                port:
+                  name: http

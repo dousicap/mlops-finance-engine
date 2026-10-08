@@ -1,0 +1,58 @@
+# Tests unitaires des alertes : `promtool test rules alerts_test.yml`
+rule_files:
+  - alerts.yml
+evaluation_interval: 1m
+
+tests:
+  - name: API arrêtée
+    interval: 1m
+    input_series:
+      - series: 'up{job="finml-api", instance="api:8000"}'
+        values: "1 1 0 0 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FinmlApiDown
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FinmlApiDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: finml-api, instance: "api:8000"}
+            exp_annotations:
+              summary: "L'API finml ne répond plus au scrape Prometheus"
+              action: "Vérifier les tâches ECS ou les pods, puis /health et les logs de démarrage."
+
+  - name: Erreur du modèle
+    interval: 1m
+    input_series:
+      - series: 'finml_prediction_errors_total{usecase="retard_paiement", raison="erreur_modele"}'
+        values: "0 0 0 2 2 2"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FinmlModelErrors
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FinmlModelErrors
+        exp_alerts:
+          - exp_labels: {severity: critical, usecase: retard_paiement}
+            exp_annotations:
+              summary: "Le modèle retard_paiement lève des erreurs"
+              action: "Lire les traces « échec de prédiction » dans les logs, revenir à la version précédente si besoin."
+
+  - name: Latence p95 élevée
+    interval: 1m
+    input_series:
+      # 10 requêtes par minute, toutes entre 0,5 et 1 s.
+      - series: 'finml_prediction_latency_seconds_bucket{usecase="imputation_comptable", le="0.5"}'
+        values: "0+0x30"
+      - series: 'finml_prediction_latency_seconds_bucket{usecase="imputation_comptable", le="1.0"}'
+        values: "0+10x30"
+      - series: 'finml_prediction_latency_seconds_bucket{usecase="imputation_comptable", le="+Inf"}'
+        values: "0+10x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: FinmlLatencyP95High
+        exp_alerts:
+          - exp_labels: {severity: warning, usecase: imputation_comptable}
+            exp_annotations:
+              summary: "Latence p95 supérieure à 500 ms sur imputation_comptable"
+              action: "Vérifier la charge CPU et le nombre de tâches, augmenter le maximum de l'autoscaling."

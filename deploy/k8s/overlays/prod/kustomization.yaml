@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  - name: finml-api
+    newName: 123456789012.dkr.ecr.eu-west-3.amazonaws.com/finml-api   # à remplacer
+    newTag: bootstrap                                                  # la CI pose le SHA du commit
+patches:
+  - target: {kind: Ingress, name: finml-api}
+    patch: |-
+      - op: replace
+        path: /spec/rules/0/host
+        value: finml.dou-consulting.fr
+      - op: replace
+        path: /spec/tls/0/hosts/0
+        value: finml.dou-consulting.fr
+  - target: {kind: HorizontalPodAutoscaler, name: finml-api}
+    patch: |-
+      - op: replace
+        path: /spec/maxReplicas
+        value: 10

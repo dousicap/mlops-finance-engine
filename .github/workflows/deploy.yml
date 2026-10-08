@@ -1,0 +1,128 @@
+name: Entraîner et déployer
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # nécessaire pour l'authentification OIDC auprès d'AWS
+
+env:
+  AWS_REGION: eu-west-3
+  ECR_REPOSITORY: finml-api
+  ECS_CLUSTER: finml-cluster
+  ECS_SERVICE: finml-api
+  TASK_FAMILY: finml-api
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install --system -e ".[dev]"
+      - run: ruff check src tests usecases
+      - run: pytest
+
+  entrainement:
+    name: Entraînement, porte qualité, export du champion
+    needs: tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install --system -e .
+      # Échoue si un modèle n'atteint pas son min_score : rien n'est déployé.
+      - run: finml run-all --out models
+      - name: Résumé des modèles
+        run: |
+          echo "| Cas d'usage | Modèle | Métrique | Score |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          for f in models/*/manifest.json; do
+            python -c "import json,sys; m=json.load(open(sys.argv[1])); print(f\"| {m['usecase']} | {m['candidate']} | {m['metric']} | {m['score']:.3f} |\")" "$f" >> $GITHUB_STEP_SUMMARY
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: models
+          path: models/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mlflow-tracking
+          path: mlflow.db
+
+  deploiement:
+    needs: entrainement
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: models
+          path: models/
+
+      - name: Authentification AWS par OIDC (aucune clé stockée)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build et push de l'image (tag = SHA du commit, immuable)
+        id: image
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+        run: |
+          docker build -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "uri=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: Définition de tâche actuelle
+        run: |
+          aws ecs describe-task-definition --task-definition "$TASK_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: api
+          image: ${{ steps.image.outputs.uri }}
+
+      # Rolling (défaut) : attend la stabilité. Si les health checks échouent,
+      # le circuit breaker ECS revient à la version précédente.
+      - name: Déploiement rolling
+        if: vars.DEPLOYMENT_STRATEGY != 'blue_green'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          wait-for-service-stability: true
+
+      # Blue/green : CodeDeploy lance green, bascule 10 % du trafic pendant 5 min puis 100 %.
+      # Une alarme 5xx ou latence pendant la bascule déclenche le retour arrière vers blue.
+      - name: Déploiement blue/green (CodeDeploy)
+        if: vars.DEPLOYMENT_STRATEGY == 'blue_green'
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ env.ECS_SERVICE }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          codedeploy-appspec: appspec.yaml
+          codedeploy-application: finml-api
+          codedeploy-deployment-group: finml-api
+          wait-for-service-stability: true
+          wait-for-minutes: 30

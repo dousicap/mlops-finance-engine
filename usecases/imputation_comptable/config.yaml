@@ -1,0 +1,57 @@
+name: imputation_comptable
+description: Proposition du compte de charge PCG à partir du libellé d'une pièce, avec les exemples qui la justifient.
+task: text_classification
+registered_model: finml-imputation-comptable
+target: compte
+
+features:
+  text: libelle
+
+schema:
+  libelle: {}
+  compte: {allowed: ["6061", "6063", "6064", "6132", "6135", "6155", "616", "6226", "6231", "6251", "6257", "626", "627", "6185"]}
+
+labels:
+  "6061": Fournitures non stockables (eau, énergie)
+  "6063": Fournitures d'entretien et de petit équipement
+  "6064": Fournitures administratives
+  "6132": Locations immobilières
+  "6135": Locations mobilières
+  "6155": Entretien et réparations sur biens mobiliers
+  "616": Primes d'assurances
+  "6226": Honoraires
+  "6231": Annonces et insertions
+  "6251": Voyages et déplacements
+  "6257": Réceptions
+  "626": Frais postaux et de télécommunications
+  "627": Services bancaires et assimilés
+  "6185": Frais de colloques, séminaires, conférences
+
+data:
+  generator: generate.py
+  path: data/imputation_comptable.csv
+  n_rows: 5000
+  seed: 7
+
+metric: accuracy
+min_score: 0.80
+# Sous ce niveau de confiance, la proposition part en revue humaine (a_revoir = true).
+decision_threshold: 0.6
+
+candidates:
+  - name: recherche_vectorielle_k5
+    type: knn_retrieval
+    params: {k: 5, embedder: tfidf, embedder_params: {dim: 256}}
+  - name: recherche_vectorielle_k15
+    type: knn_retrieval
+    params: {k: 15, embedder: tfidf, embedder_params: {dim: 256}}
+  - name: tfidf_regression_logistique
+    type: tfidf_logreg
+    params: {C: 10.0}
+  # Embeddings sémantiques multilingues : décommenter après `pip install .[embeddings]`.
+  # Mesuré sur ces données : accuracy 0.833 (k=5), contre 0.88 pour les n-grammes de caractères.
+  # Les libellés bancaires sont courts, bruités et dominés par des noms de fournisseurs :
+  # la forme compte plus que le sens. Sur des descriptions longues, le résultat s'inverse.
+  # - name: recherche_semantique_minilm
+  #   type: knn_retrieval
+  #   params: {k: 7, embedder: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}

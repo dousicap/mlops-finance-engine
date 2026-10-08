@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: finml-api
+data:
+  FINML_MODELS_DIR: /app/models
+  FINML_PREDICTION_LOG_DIR: /var/log/finml
+  MLFLOW_TRACKING_URI: sqlite:////tmp/mlflow.db

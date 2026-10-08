@@ -1,0 +1,51 @@
+# Alertes de l'API finml. Chaque alerte dit quoi faire (annotation « action »).
+groups:
+  - name: finml-service
+    rules:
+      - alert: FinmlApiDown
+        expr: up{job="finml-api"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "L'API finml ne répond plus au scrape Prometheus"
+          action: "Vérifier les tâches ECS ou les pods, puis /health et les logs de démarrage."
+
+      - alert: FinmlModelErrors
+        expr: sum by (usecase) (increase(finml_prediction_errors_total{raison="erreur_modele"}[5m])) > 0
+        labels: {severity: critical}
+        annotations:
+          summary: "Le modèle {{ $labels.usecase }} lève des erreurs"
+          action: "Lire les traces « échec de prédiction » dans les logs, revenir à la version précédente si besoin."
+
+      - alert: FinmlInvalidInputs
+        expr: sum by (usecase) (rate(finml_prediction_errors_total{raison="donnees_invalides"}[10m])) > 0.05
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Données refusées en continu sur {{ $labels.usecase }}"
+          action: "Un système amont envoie des données hors contrat : prévenir l'équipe qui les produit."
+
+      - alert: FinmlLatencyP95High
+        expr: histogram_quantile(0.95, sum by (le, usecase) (rate(finml_prediction_latency_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Latence p95 supérieure à 500 ms sur {{ $labels.usecase }}"
+          action: "Vérifier la charge CPU et le nombre de tâches, augmenter le maximum de l'autoscaling."
+
+  - name: finml-modele
+    rules:
+      # Signal précoce : le score moyen de la dernière heure s'écarte de celui des 7 derniers jours.
+      # Il ne remplace pas `finml drift`, il dit quand le lancer.
+      - alert: FinmlScoreShift
+        expr: |
+          abs(
+            sum by (usecase) (rate(finml_prediction_score_sum[1h])) / sum by (usecase) (rate(finml_prediction_score_count[1h]))
+            -
+            sum by (usecase) (rate(finml_prediction_score_sum[7d])) / sum by (usecase) (rate(finml_prediction_score_count[7d]))
+          ) > 0.15
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Le score moyen de {{ $labels.usecase }} a bougé de plus de 0,15"
+          action: "Lancer `finml drift {{ $labels.usecase }}` sur le journal des prédictions."

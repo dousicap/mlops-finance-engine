@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]
+
+jobs:
+  qualite:
+    name: Lint et tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - run: uv pip install --system -e ".[dev]"
+      - run: ruff check src tests usecases
+      - run: pytest
+
+  terraform:
+    name: Terraform fmt et validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  kubernetes:
+    name: Manifestes Kubernetes (schéma et bonnes pratiques)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Outils
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz kubeconform
+          curl -sSL https://github.com/stackrox/kube-linter/releases/download/v0.6.8/kube-linter-linux.tar.gz | tar xz kube-linter
+      - run: kubectl kustomize deploy/k8s/overlays/prod > rendered.yaml
+      - run: ./kubeconform -strict -summary -kubernetes-version 1.31.0 rendered.yaml
+      - run: ./kube-linter lint rendered.yaml
+
+  monitoring:
+    name: Configuration Prometheus et tests des alertes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: promtool check et test
+        run: |
+          docker run --rm -v "$PWD/deploy/monitoring:/w" -w /w --entrypoint promtool prom/prometheus:v2.55.1 check config prometheus.yml
+          docker run --rm -v "$PWD/deploy/monitoring:/w" -w /w --entrypoint promtool prom/prometheus:v2.55.1 test rules alerts_test.yml

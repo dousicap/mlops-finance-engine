@@ -1,0 +1,59 @@
+name: Déployer sur Kubernetes (EKS)
+
+# Déclenchement manuel : choisit l'image déjà publiée dans ECR par le workflow principal.
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Tag de l'image dans ECR (SHA du commit)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-west-3
+  CLUSTER: finml-eks
+  NAMESPACE: finml
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Accès au cluster
+        run: aws eks update-kubeconfig --name "$CLUSTER" --region "$AWS_REGION"
+
+      - name: Image à déployer
+        working-directory: deploy/k8s/overlays/prod
+        env:
+          IMAGE: ${{ steps.ecr.outputs.registry }}/finml-api:${{ inputs.image_tag }}
+        run: kustomize edit set image "finml-api=$IMAGE"
+
+      - name: Application (rolling update, maxUnavailable 0)
+        run: |
+          kubectl apply -k deploy/k8s/overlays/prod
+          kubectl -n "$NAMESPACE" annotate deployment/finml-api \
+            kubernetes.io/change-cause="image ${{ inputs.image_tag }}" --overwrite
+
+      # Si les nouveaux pods ne deviennent pas prêts (sonde /health), on revient à la version précédente.
+      - name: Attente de stabilité, retour arrière sinon
+        run: |
+          if ! kubectl -n "$NAMESPACE" rollout status deployment/finml-api --timeout=300s; then
+            kubectl -n "$NAMESPACE" rollout undo deployment/finml-api
+            kubectl -n "$NAMESPACE" rollout status deployment/finml-api --timeout=300s
+            exit 1
+          fi
+          kubectl -n "$NAMESPACE" rollout history deployment/finml-api | tail -5

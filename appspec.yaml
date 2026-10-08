@@ -1,0 +1,11 @@
+# Utilisé seulement en blue/green (variable de dépôt DEPLOYMENT_STRATEGY = blue_green).
+# CodeDeploy remplace <TASK_DEFINITION> par la révision publiée par la CI.
+version: 0.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: <TASK_DEFINITION>
+        LoadBalancerInfo:
+          ContainerName: api
+          ContainerPort: 8000

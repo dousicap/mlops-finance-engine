@@ -1,0 +1,19 @@
+# Socle Kubernetes de l'API finml. Les overlays fixent l'image, le domaine et le dimensionnement.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: finml
+labels:
+  - pairs:
+      app.kubernetes.io/name: finml-api
+      app.kubernetes.io/part-of: finml
+    includeSelectors: true
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+  - hpa.yaml
+  - pdb.yaml
+  - networkpolicy.yaml
+  - ingress.yaml

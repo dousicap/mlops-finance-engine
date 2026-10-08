@@ -1,0 +1,55 @@
+name: retard_paiement
+description: Probabilité qu'une facture client soit payée en retard, pour prioriser les relances.
+task: tabular_classification
+registered_model: finml-retard-paiement
+target: paye_en_retard
+positive_label: 1
+
+features:
+  numeric:
+    - montant_ttc
+    - delai_contractuel_jours
+    - mois_emission
+    - anciennete_client_mois
+    - nb_retards_12m
+    - retard_moyen_12m_jours
+    - relance_automatique
+  categorical:
+    - secteur
+    - taille_client
+    - mode_paiement
+
+# Contrat de données : contrôlé avant chaque entraînement et à chaque appel de l'API.
+schema:
+  montant_ttc: {min: 0, max: 10000000}
+  delai_contractuel_jours: {min: 0, max: 120}
+  mois_emission: {min: 1, max: 12}
+  anciennete_client_mois: {min: 0}
+  nb_retards_12m: {min: 0}
+  retard_moyen_12m_jours: {min: 0}
+  relance_automatique: {allowed: [0, 1]}
+  secteur: {allowed: [btp, commerce, services, industrie, sante, public]}
+  taille_client: {allowed: [tpe, pme, eti, ge]}
+  mode_paiement: {allowed: [prelevement, virement, lcr, cheque]}
+  paye_en_retard: {allowed: [0, 1]}
+
+data:
+  generator: generate.py
+  path: data/retard_paiement.csv
+  n_rows: 8000
+  seed: 42
+
+metric: roc_auc
+min_score: 0.70
+decision_threshold: 0.5
+
+candidates:
+  - name: regression_logistique
+    type: logistic_regression
+    params: {C: 1.0}
+  - name: random_forest
+    type: random_forest
+    params: {n_estimators: 300, max_depth: 10, min_samples_leaf: 5}
+  - name: xgboost
+    type: xgboost
+    params: {n_estimators: 400, max_depth: 4, learning_rate: 0.05, subsample: 0.8, colsample_bytree: 0.8}

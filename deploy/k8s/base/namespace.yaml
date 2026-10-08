@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: finml
+  labels:
+    # Refuse tout pod qui ne respecte pas le profil de sécurité « restricted ».
+    pod-security.kubernetes.io/enforce: restricted
