@@ -35,9 +35,17 @@ from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 import finml
 from finml import business
 from finml import data as data_mod
-from finml.config import LOWER_IS_BETTER, UseCaseConfig, load_config
+from finml.config import LOWER_IS_BETTER, Candidate, UseCaseConfig, load_config
+from finml.evaluation import compare_to_champion, evaluate_champion, leakage_check
 from finml.fairness import fairness_report
-from finml.models import build_estimator, class_scores, dump_estimator, is_binary, predict_frame
+from finml.models import (
+    BASELINE,
+    build_estimator,
+    class_scores,
+    dump_estimator,
+    is_binary,
+    predict_frame,
+)
 
 CHAMPION, CHALLENGER = "champion", "challenger"
 OUTPUT_COLUMNS = ("probabilite", "confiance", "valeur")
@@ -60,6 +68,7 @@ class TrainResult:
     leaderboard: list[dict] = field(default_factory=list)
     business_metrics: dict[str, float] = field(default_factory=dict)
     fairness: dict = field(default_factory=dict)
+    evaluation: dict[str, float] = field(default_factory=dict)
 
 
 def default_tracking_uri() -> str:
@@ -191,9 +200,17 @@ def train(name: str) -> TrainResult:
     mlflow.set_tracking_uri(default_tracking_uri())
     mlflow.set_experiment(f"finml-{cfg.name}")
 
+    positive = None
     if cfg.is_tabular:
         X = df[cfg.features.all].astype({c: "float64" for c in cfg.features.numeric})
         y = df[cfg.target]
+        if not cfg.is_regression and y.nunique() == 2 and set(y.unique()) != {0, 1}:
+            # Cible binaire quelconque (oui/non, défaut/sain) : codée 0/1, la classe positive
+            # est positive_label si déclarée, sinon la dernière dans l'ordre alphabétique.
+            positive = cfg.positive_label if cfg.positive_label is not None else max(y.unique(), key=str)
+            negative = next(v for v in y.unique() if v != positive)
+            y = (y == positive).astype(int)
+            cfg = cfg.model_copy(update={"labels": {"1": str(positive), "0": str(negative)}})
     else:
         X, y = df[cfg.features.text].astype(str), df[cfg.target].astype(str)
     # Les colonnes sensibles suivent le même découpage que X : elles ne servent qu'à l'audit.
@@ -206,7 +223,7 @@ def train(name: str) -> TrainResult:
     X_train, X_test = X_train.reset_index(drop=True), X_test.reset_index(drop=True)
     y_train, y_test = y_train.reset_index(drop=True), y_test.reset_index(drop=True)
 
-    board, runs, fitted, oofs = [], {}, {}, {}
+    board, runs, fitted, oofs, fold_scores = [], {}, {}, {}, {}
     with mlflow.start_run(run_name=f"tournoi-{time.strftime('%Y%m%d-%H%M%S')}"):
         mlflow.set_tags(
             {
@@ -219,8 +236,13 @@ def train(name: str) -> TrainResult:
         mlflow.log_params({"n_rows": len(df), "test_size": cfg.test_size, "metric": cfg.metric,
                            "cv_folds": cfg.cv_folds, "n_candidates": len(cfg.candidates)})
 
+        leaks = leakage_check(cfg, X_train, y_train) if cfg.is_tabular else {}
+        if leaks:  # une seule variable prédit presque parfaitement la cible : fuite probable
+            mlflow.set_tag("fuite_suspectee", ", ".join(f"{c} ({s:.3f})" for c, s in leaks.items()))
         skipped: list[str] = []
-        for cand in cfg.candidates:
+        # Référence naïve toujours en lice : un champion qui ne la bat pas ne sert à rien.
+        baseline = Candidate.model_construct(name=BASELINE, type="dummy", params={})
+        for cand in [baseline, *cfg.candidates]:
             reason = _skip_reason(cand, n_classes)
             if reason:
                 skipped.append(f"{cand.name} ({reason})")
@@ -228,6 +250,7 @@ def train(name: str) -> TrainResult:
             with mlflow.start_run(run_name=cand.name, nested=True) as run:
                 t0 = time.perf_counter()
                 cv, oof = _cross_validate(cfg, cand, X_train, y_train)
+                fold_scores[cand.name] = cv
                 est = build_estimator(cfg, cand).fit(X_train, y_train)
                 holdout = evaluate(cfg, est, X_test, y_test)
                 seconds = time.perf_counter() - t0
@@ -245,12 +268,18 @@ def train(name: str) -> TrainResult:
         board.sort(key=lambda r: r["cv_moyenne"], reverse=cfg.metric not in LOWER_IS_BETTER)
         best = board[0]["candidat"]
         best_test = board[0]["test"]
+        compare_to_champion(board, fold_scores, cfg)  # écart significatif ou égalité statistique
+        if positive is not None:
+            mlflow.set_tag("classe_positive", str(positive))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "classement.csv"
             pd.DataFrame(board).to_csv(path, index=False)
             mlflow.log_artifact(str(path))
         mlflow.set_tag("best_candidate", best)
         mlflow.log_metric(f"best_{cfg.metric}", best_test)
+        if best == BASELINE:
+            mlflow.set_tag("quality_gate", "failed")
+            raise QualityGateError(f"{cfg.name} : aucun candidat ne bat la référence naïve")
         if not cfg.passes_gate(best_test):
             mlflow.set_tag("quality_gate", "failed")
             limit = cfg.max_score if cfg.min_score is None else cfg.min_score
@@ -268,11 +297,13 @@ def train(name: str) -> TrainResult:
             mlflow.set_tag("equite_statut", fair_detail["statut"])
             mlflow.log_dict(fair_detail, "equite.json")
         _log_charts(cfg, board, fitted[best], threshold, X_test, y_test)
+        eval_metrics, eval_detail = evaluate_champion(cfg, fitted[best], threshold, X_test, y_test)
+        mlflow.log_dict(eval_detail, "evaluation.json")
         with mlflow.start_run(run_id=runs[best], nested=True):
-            mlflow.log_metrics({**biz, **fair_metrics})
+            mlflow.log_metrics({**biz, **fair_metrics, **eval_metrics})
             example = X_test.head(3).to_frame() if cfg.task == "text_classification" else X_test.head(3)
             model_info = _log_model(served_cfg, fitted[best], X_test, example)
-        mlflow.log_metrics({**biz, **fair_metrics})
+        mlflow.log_metrics({**biz, **fair_metrics, **eval_metrics})
 
     mv = mlflow.register_model(model_info.model_uri, cfg.registered_model)
     client = MlflowClient()
@@ -280,7 +311,7 @@ def train(name: str) -> TrainResult:
     alias = _promote(client, cfg, mv.version, best_test)
     scores = {r["candidat"]: r["test"] for r in board}
     return TrainResult(cfg.name, best, best_test, cfg.metric, runs[best], mv.version, alias, scores,
-                       board, biz, fair_detail)
+                       board, biz, fair_detail, eval_metrics)
 
 
 def _log_charts(cfg: UseCaseConfig, board: list[dict], est, threshold: float, X_test, y_test) -> None:
@@ -296,6 +327,8 @@ def _log_charts(cfg: UseCaseConfig, board: list[dict], est, threshold: float, X_
         proba = est.predict_proba(X_test)[:, 1]
         figures["matrice_confusion"] = plots.confusion(y_test, (proba >= threshold).astype(int), [0, 1])
         figures["courbes_roc_precision_rappel"] = plots.binary_curves(y_test, proba)
+        figures["calibration"] = plots.calibration(y_test, proba)
+        figures["metriques_selon_seuil"] = plots.threshold_metrics(y_test, proba, threshold)
     else:
         classes, scores = class_scores(est, cfg, X_test)
         figures["matrice_confusion"] = plots.confusion(np.asarray(y_test), classes[scores.argmax(axis=1)],

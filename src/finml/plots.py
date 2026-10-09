@@ -16,6 +16,7 @@ matplotlib.use("Agg")  # rendu sans écran (CI, conteneur)
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.calibration import CalibrationDisplay
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     PrecisionRecallDisplay,
@@ -61,6 +62,46 @@ def binary_curves(y_true, proba):
     PrecisionRecallDisplay.from_predictions(y_true, proba, ax=b, color=ACCENT)
     b.axhline(float(np.mean(y_true)), ls="--", color=NEUTRAL)
     b.set_title("Courbe précision-rappel")
+    fig.tight_layout()
+    return fig
+
+
+def calibration(y_true, proba):
+    """Probabilité prédite contre fréquence observée : la diagonale = probabilités fiables."""
+    fig, (a, b) = plt.subplots(2, 1, figsize=(6, 6.5), height_ratios=[3, 1], sharex=True)
+    CalibrationDisplay.from_predictions(y_true, proba, n_bins=10, strategy="quantile", ax=a, color=ACCENT, name="champion")
+    a.legend(a.get_lines(), ["calibration parfaite", "champion"], loc="lower right")
+    a.set_title("Calibration des probabilités (diagonale = fiable)")
+    a.set_xlabel("")
+    a.set_ylabel("fréquence réelle des positifs")
+    b.hist(proba, bins=30, color=NEUTRAL)
+    b.set_xlabel("probabilité prédite")
+    b.set_ylabel("effectif")
+    fig.tight_layout()
+    return fig
+
+
+def threshold_metrics(y_true, proba, served: float):
+    """Précision, rappel et spécificité selon le seuil : l'arbitrage faux positifs / faux négatifs."""
+    y_true, proba = np.asarray(y_true).astype(int), np.asarray(proba)
+    grid = np.unique(np.r_[np.linspace(0.001, 0.999, 200), min(served, 1.0)])  # le seuil servi y figure
+    prec, rec, spec = [], [], []
+    for t in grid:
+        flag = proba >= t
+        tp = np.sum(flag & (y_true == 1))
+        prec.append(tp / max(flag.sum(), 1))
+        rec.append(tp / max(np.sum(y_true == 1), 1))
+        spec.append(np.sum(~flag & (y_true == 0)) / max(np.sum(y_true == 0), 1))
+    fig, ax = plt.subplots(figsize=(8, 4.5))
+    ax.plot(grid, prec, label="précision", color=ACCENT)
+    ax.plot(grid, rec, label="rappel (sensibilité)", color="#c8553d")
+    ax.plot(grid, spec, label="spécificité", color="#588157")
+    ax.axvline(served, ls="--", color="#333333")
+    ax.text(served, 1.02, f" seuil métier {served:.3g}", fontsize=8)
+    ax.set_xlabel("seuil de décision")
+    ax.set_ylim(0, 1.08)
+    ax.set_title("Métriques selon le seuil")
+    ax.legend(loc="lower left")
     fig.tight_layout()
     return fig
 

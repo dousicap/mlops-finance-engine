@@ -68,7 +68,9 @@ def test_tournament_ranks_by_cross_validation_and_skips_missing_deps(project, mo
     assert cv == sorted(cv, reverse=True)
     assert result.best_candidate == result.leaderboard[0]["candidat"]
     assert "reseau_neurones_pytorch" not in {row["candidat"] for row in result.leaderboard}
-    assert len(result.leaderboard) == len(load_config("retard_paiement").candidates) - 1
+    # tous les candidats sauf PyTorch, plus la référence naïve
+    assert len(result.leaderboard) == len(load_config("retard_paiement").candidates)
+    assert "reference_naive" in {row["candidat"] for row in result.leaderboard}
     assert "metier_economie_annuelle" in result.business_metrics
 
 

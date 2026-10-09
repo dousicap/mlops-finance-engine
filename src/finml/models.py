@@ -17,6 +17,7 @@ from lightgbm import LGBMClassifier, LGBMRegressor
 from sklearn.base import BaseEstimator, ClassifierMixin, clone
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
+from sklearn.dummy import DummyClassifier, DummyRegressor
 from sklearn.ensemble import (
     ExtraTreesClassifier,
     ExtraTreesRegressor,
@@ -129,7 +130,12 @@ def _tabular_model(cand: Candidate, seed: int):
 DENSE_INPUT = {"naive_bayes", "hist_gradient_boosting", "torch_mlp"}
 
 
+BASELINE = "reference_naive"
+
+
 def build_estimator(cfg: UseCaseConfig, cand: Candidate):
+    if cand.type == "dummy":  # référence naïve : moyenne ou fréquence des classes, sans regarder X
+        return DummyRegressor(strategy="mean") if cfg.is_regression else DummyClassifier(strategy="prior")
     if cfg.is_tabular:
         dense = cand.type in DENSE_INPUT
         # Valeurs manquantes : médiane (numérique), modalité la plus fréquente (catégorielle).
@@ -235,13 +241,11 @@ def predict_frame(estimator, cfg: UseCaseConfig, model_input: pd.DataFrame) -> p
     if cfg.is_tabular and is_binary(estimator):
         X = model_input[cfg.features.all]
         proba = estimator.predict_proba(X)[:, 1]
-        return pd.DataFrame(
-            {
-                "probabilite": np.round(proba, 4),
-                "prediction": (proba >= cfg.decision_threshold).astype(int),
-                "seuil": cfg.decision_threshold,
-            }
-        )
+        pred = (proba >= cfg.decision_threshold).astype(int)
+        frame = pd.DataFrame({"probabilite": np.round(proba, 4), "prediction": pred, "seuil": cfg.decision_threshold})
+        if cfg.labels:  # cible d'origine non 0/1 (ex. oui / non) : libellé de la classe prédite
+            frame["classe"] = [cfg.labels[str(v)] for v in pred]
+        return frame
 
     labels, out = cfg.labels, cfg.output
     if cfg.is_tabular:

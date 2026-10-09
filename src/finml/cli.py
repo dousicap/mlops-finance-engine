@@ -60,10 +60,14 @@ def cmd_train(args):
             failed = True
             continue
         print(f"\n{name} : champion {r.best_candidate}, {r.metric} {r.score:.3f} sur le test -> v{r.version} @{r.alias}")
-        print(f"  {'candidat':<32}{'CV moyenne':>11}{'écart-type':>11}{'test':>8}{'secondes':>10}")
+        print(f"  {'candidat':<32}{'CV moyenne':>11}{'écart-type':>11}{'test':>8}{'secondes':>10}"
+              f"{'p vs champion':>15}")
         for row in r.leaderboard:
+            p = row.get("p_value_vs_champion")
             print(f"  {row['candidat']:<32}{row['cv_moyenne']:>11.3f}{row['cv_ecart_type']:>11.3f}"
-                  f"{row['test']:>8.3f}{row['secondes']:>10.1f}")
+                  f"{row['test']:>8.3f}{row['secondes']:>10.1f}{'-' if p is None else f'{p:.3f}':>15}")
+        for k, v in r.evaluation.items():
+            print(f"  {k:<40}{v:>14.4f}")
         for k, v in r.business_metrics.items():
             print(f"  {k:<40}{v:>14,.2f}".replace(",", " "))
         if r.fairness:
