@@ -152,7 +152,7 @@ class VectorRetrievalClassifier:
         for r in range(len(idx)):
             out.append(
                 [
-                    {"libelle": str(self.texts[j]), "compte": str(self.labels[j]), "similarite": round(float(s), 3)}
+                    {"texte": str(self.texts[j]), "classe": str(self.labels[j]), "similarite": round(float(s), 3)}
                     for j, s in list(zip(idx[r], sims[r]))[:n]
                 ]
             )
@@ -178,12 +178,12 @@ class PgVectorIndex:
         with self._connect() as conn:
             conn.execute(f"DROP TABLE IF EXISTS {self.table}")
             conn.execute(
-                f"CREATE TABLE {self.table} (id serial PRIMARY KEY, libelle text, compte text, "
+                f"CREATE TABLE {self.table} (id serial PRIMARY KEY, texte text, classe text, "
                 f"embedding vector({self.dim}))"
             )
             with conn.cursor() as cur:
                 cur.executemany(
-                    f"INSERT INTO {self.table} (libelle, compte, embedding) VALUES (%s, %s, %s)",
+                    f"INSERT INTO {self.table} (texte, classe, embedding) VALUES (%s, %s, %s)",
                     [(t, lab, v) for t, lab, v in zip(texts, labels, vectors)],
                 )
             conn.execute(
@@ -194,15 +194,15 @@ class PgVectorIndex:
     def search(self, vector: np.ndarray, k: int) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                f"SELECT libelle, compte, 1 - (embedding <=> %s) AS sim FROM {self.table} "
+                f"SELECT texte, classe, 1 - (embedding <=> %s) AS sim FROM {self.table} "
                 f"ORDER BY embedding <=> %s LIMIT %s",
                 (vector, vector, k),
             ).fetchall()
-        return [{"libelle": r[0], "compte": r[1], "similarite": round(float(r[2]), 3)} for r in rows]
+        return [{"texte": r[0], "classe": r[1], "similarite": round(float(r[2]), 3)} for r in rows]
 
     def vote(self, vector: np.ndarray, k: int) -> list[tuple[str, float]]:
         scores: dict[str, float] = defaultdict(float)
         for hit in self.search(vector, k):
-            scores[hit["compte"]] += max(hit["similarite"], 0.0)
+            scores[hit["classe"]] += max(hit["similarite"], 0.0)
         total = sum(scores.values()) or 1.0
         return sorted(((c, s / total) for c, s in scores.items()), key=lambda x: -x[1])

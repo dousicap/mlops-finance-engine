@@ -11,6 +11,11 @@ schema:
   libelle: {}
   compte: {allowed: ["6061", "6063", "6064", "6132", "6135", "6155", "616", "6226", "6231", "6251", "6257", "626", "627", "6185"]}
 
+# Noms des champs de sortie de l'API : vocabulaire comptable de ce cas d'usage.
+output:
+  class_field: compte
+  class_name_field: intitule
+
 labels:
   "6061": Fournitures non stockables (eau, énergie)
   "6063": Fournitures d'entretien et de petit équipement

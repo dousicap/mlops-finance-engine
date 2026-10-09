@@ -23,7 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
 COPY --from=builder /install /usr/local
 COPY usecases ./usecases
 COPY models ./models
-RUN for u in retard_paiement imputation_comptable defaut_credit maintenance_predictive; do \
+RUN for u in retard_paiement imputation_comptable defaut_credit maintenance_predictive diabete; do \
         test -f models/$u/MLmodel || exit 1; done \
     && useradd --uid 1001 --no-create-home finml \
     && chown -R finml /app

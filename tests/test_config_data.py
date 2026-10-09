@@ -7,7 +7,8 @@ from finml.config import UseCaseConfig, list_usecases, load_config
 
 
 def test_usecases_are_discovered(project):
-    assert list_usecases() == ["defaut_credit", "imputation_comptable", "maintenance_predictive", "retard_paiement"]
+    assert list_usecases() == ["defaut_credit", "diabete", "imputation_comptable", "maintenance_predictive",
+                               "retard_paiement"]
 
 
 def test_configs_are_valid(project):

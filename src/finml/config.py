@@ -41,18 +41,49 @@ class Features(BaseModel):
         return cols
 
 
+# Modèles disponibles par type de tâche. Un même nom (ex. random_forest) désigne la version
+# classification ou régression selon la tâche du cas d'usage.
+CLASSIFICATION_MODELS = {
+    "logistic_regression", "naive_bayes", "knn", "svm", "decision_tree", "random_forest",
+    "extra_trees", "hist_gradient_boosting", "xgboost", "lightgbm", "mlp", "torch_mlp",
+}
+REGRESSION_MODELS = {
+    "linear_regression", "ridge", "lasso", "elastic_net", "svr", "knn", "decision_tree",
+    "random_forest", "extra_trees", "hist_gradient_boosting", "xgboost", "lightgbm", "mlp",
+}
+TEXT_MODELS = {"tfidf_logreg", "tfidf_svm", "tfidf_naive_bayes", "knn_retrieval"}
+MODELS_BY_TASK = {
+    "tabular_classification": CLASSIFICATION_MODELS,
+    "tabular_regression": REGRESSION_MODELS,
+    "text_classification": TEXT_MODELS,
+}
+# Métriques où plus bas vaut mieux : la porte qualité devient un plafond (max_score).
+LOWER_IS_BETTER = {"rmse", "mae"}
+METRICS_BY_TASK = {
+    "tabular_classification": {"roc_auc", "f1", "accuracy", "average_precision"},
+    "tabular_regression": {"rmse", "mae", "r2"},
+    "text_classification": {"accuracy", "f1", "top3_accuracy"},
+}
+
+
 class Candidate(BaseModel):
     """Un modèle candidat. Le moteur entraîne tous les candidats et garde le meilleur."""
 
     name: str
     type: Literal[
-        # tabulaire
-        "logistic_regression", "naive_bayes", "knn", "svm", "random_forest", "extra_trees",
-        "hist_gradient_boosting", "xgboost", "lightgbm", "mlp", "torch_mlp",
-        # texte
+        "logistic_regression", "naive_bayes", "knn", "svm", "decision_tree", "random_forest",
+        "extra_trees", "hist_gradient_boosting", "xgboost", "lightgbm", "mlp", "torch_mlp",
+        "linear_regression", "ridge", "lasso", "elastic_net", "svr",
         "tfidf_logreg", "tfidf_svm", "tfidf_naive_bayes", "knn_retrieval",
     ]
     params: dict[str, Any] = Field(default_factory=dict)
+
+
+class OutputConfig(BaseModel):
+    """Noms des champs de sortie d'une classification multi-classes (API, journal, LLM)."""
+
+    class_field: str = "classe"
+    class_name_field: str = "intitule"
 
 
 class CostBusiness(BaseModel):
@@ -120,15 +151,16 @@ class LLMConfig(BaseModel):
 class UseCaseConfig(BaseModel):
     name: str
     description: str
-    task: Literal["tabular_classification", "text_classification"]
+    task: Literal["tabular_classification", "tabular_regression", "text_classification"]
     registered_model: str
     target: str
     positive_label: Any | None = None
     features: Features
     schema_rules: dict[str, ColumnRule] = Field(default_factory=dict, alias="schema")
     data: DataConfig
-    metric: Literal["roc_auc", "f1", "accuracy", "top3_accuracy", "average_precision"]
-    min_score: float = Field(ge=0, le=1)
+    metric: Literal["roc_auc", "f1", "accuracy", "top3_accuracy", "average_precision", "rmse", "mae", "r2"]
+    min_score: float | None = Field(default=None, le=1)  # porte qualité, métriques où plus haut vaut mieux
+    max_score: float | None = Field(default=None, ge=0)  # porte qualité, métriques d'erreur (rmse, mae)
     test_size: float = 0.2
     candidates: list[Candidate]
     decision_threshold: float = 0.5  # recalculé à l'entraînement quand un bloc business existe
@@ -137,13 +169,42 @@ class UseCaseConfig(BaseModel):
     business: CostBusiness | AutomationBusiness | None = Field(default=None, discriminator="kind")
     llm: LLMConfig | None = None
     fairness: FairnessConfig | None = None
+    output: OutputConfig = Field(default_factory=OutputConfig)
 
     model_config = {"populate_by_name": True}
+
+    @property
+    def is_regression(self) -> bool:
+        return self.task == "tabular_regression"
+
+    @property
+    def is_tabular(self) -> bool:
+        return self.task != "text_classification"
+
+    def better(self, a: float, b: float) -> bool:
+        """a est-il strictement meilleur que b pour la métrique du cas d'usage ?"""
+        return a < b if self.metric in LOWER_IS_BETTER else a > b
+
+    def passes_gate(self, score: float) -> bool:
+        if self.metric in LOWER_IS_BETTER:
+            return score <= self.max_score
+        return score >= self.min_score
 
     @model_validator(mode="after")
     def _check_consistency(self) -> UseCaseConfig:
         if self.task == "text_classification" and not self.features.text:
             raise ValueError("Un cas text_classification doit déclarer features.text")
+        if self.metric not in METRICS_BY_TASK[self.task]:
+            raise ValueError(f"Métrique {self.metric} incompatible avec {self.task}")
+        if self.metric in LOWER_IS_BETTER and self.max_score is None:
+            raise ValueError(f"{self.metric} : déclarer max_score (erreur maximale acceptée)")
+        if self.metric not in LOWER_IS_BETTER and self.min_score is None:
+            raise ValueError(f"{self.metric} : déclarer min_score (score minimal accepté)")
+        wrong = [c.name for c in self.candidates if c.type not in MODELS_BY_TASK[self.task]]
+        if wrong:
+            raise ValueError(f"Candidats incompatibles avec {self.task} : {wrong}")
+        if self.task == "tabular_regression" and (self.business or self.fairness):
+            raise ValueError("Blocs business et fairness : réservés à la classification")
         if self.target in self.features.all:
             raise ValueError("La cible ne peut pas être une variable d'entrée")
         if not self.candidates:
@@ -154,7 +215,7 @@ class UseCaseConfig(BaseModel):
             raise ValueError("Le bloc business « cost » s'applique à une classification binaire tabulaire")
         if self.llm and self.task != "text_classification":
             raise ValueError("Le second avis LLM s'applique aux cas d'usage texte")
-        if self.business and self.business.kind == "automation" and self.task != "text_classification":
+        if self.business and self.business.kind == "automation" and self.task == "tabular_regression":
             raise ValueError("Le bloc business « automation » s'applique à une classification multi-classes")
         if self.fairness:
             if self.task != "tabular_classification":

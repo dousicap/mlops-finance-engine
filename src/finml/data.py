@@ -95,7 +95,11 @@ def validate(df: pd.DataFrame, cfg: UseCaseConfig, *, with_target: bool = True) 
             if bad:
                 report.errors.append(f"{col} : modalités non autorisées {bad[:5]}")
 
-    if with_target:
+    if with_target and cfg.is_regression:
+        n_bad = int(pd.to_numeric(df[cfg.target], errors="coerce").isna().sum())
+        if n_bad:
+            report.errors.append(f"{cfg.target} : {n_bad} valeur(s) de cible non numérique(s) ou manquante(s)")
+    elif with_target:
         counts = df[cfg.target].value_counts()
         if len(counts) < 2:
             report.errors.append("La cible n'a qu'une seule classe")

@@ -135,8 +135,9 @@ def make_client(cfg: UseCaseConfig, provider: str = "auto") -> LLMClient:
 def render_prompt(cfg: UseCaseConfig, libelle: str, top3: list[dict], exemples: list[dict]) -> str:
     template = (usecase_dir(cfg.name) / cfg.llm.prompt).read_text(encoding="utf-8")
     comptes = "\n".join(f"- {code} : {label}" for code, label in cfg.labels.items())
-    top = "\n".join(f"- {p['compte']} ({p.get('intitule', '')}) : {p['score']:.2f}" for p in top3) or "- aucune"
-    ex = "\n".join(f"- « {e['libelle']} » -> {e['compte']}" for e in exemples) or "- aucune"
+    cls, name, txt = cfg.output.class_field, cfg.output.class_name_field, cfg.features.text
+    top = "\n".join(f"- {p[cls]} ({p.get(name, '')}) : {p['score']:.2f}" for p in top3) or "- aucune"
+    ex = "\n".join(f"- « {e[txt]} » -> {e[cls]}" for e in exemples) or "- aucune"
     return template.format(libelle=libelle, comptes=comptes, top3=top, exemples=ex)
 
 
@@ -182,7 +183,7 @@ def evaluate(cfg: UseCaseConfig, client: LLMClient, cases: list[dict]) -> dict[s
     n = len(results)
     valid = [r for r, c in zip(results, cases) if r.valide]
     correct = sum(1 for r, c in zip(results, cases) if r.valide and r.avis.compte == c["compte"])
-    model_correct = sum(1 for c in cases if c["top3"] and c["top3"][0]["compte"] == c["compte"])
+    model_correct = sum(1 for c in cases if c["top3"] and c["top3"][0][cfg.output.class_field] == c["compte"])
     return {
         "llm_cas": n,
         "llm_taux_sortie_valide": len(valid) / n if n else 0.0,

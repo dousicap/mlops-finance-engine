@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 
 from finml.config import UseCaseConfig, list_usecases, load_config
 from finml.data import validate
-from finml.monitoring import OUTPUT_COLUMNS, PredictionLogger
+from finml.monitoring import PredictionLogger
 from finml.train import default_tracking_uri
 
 log = logging.getLogger("finml.api")
@@ -93,8 +93,8 @@ def create_app(models_dir: str | Path | None = None, usecases: list[str] | None 
         yield
 
     app = FastAPI(
-        title="finml - moteur de prédiction financière",
-        description="Un socle MLOps, plusieurs cas d'usage déclarés en configuration.",
+        title="finml - moteur de prédiction",
+        description="Un socle MLOps, des cas d'usage de tout domaine déclarés en configuration.",
         version="0.2.0",
         lifespan=lifespan,
     )
@@ -147,7 +147,7 @@ def create_app(models_dir: str | Path | None = None, usecases: list[str] | None 
 
         LATENCY.labels(usecase).observe(latency)
         PREDICTIONS.labels(usecase).inc(len(records))
-        score_col = next((c for c in OUTPUT_COLUMNS if c in out), None)
+        score_col = next((c for c in ("probabilite", "confiance") if c in out), None)
         if score_col:
             for v in out[score_col]:
                 SCORES.labels(usecase).observe(float(v))

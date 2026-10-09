@@ -61,7 +61,7 @@ def test_cost_block_rejected_on_text_usecase(project):
 def test_tournament_ranks_by_cross_validation_and_skips_missing_deps(project, monkeypatch):
     from finml import data, train
 
-    monkeypatch.setattr(train, "_available", lambda cand: cand.type != "torch_mlp")
+    monkeypatch.setattr(train, "_skip_reason", lambda cand, n: "absent" if cand.type == "torch_mlp" else None)
     data.generate(load_config("retard_paiement"))
     result = train.train("retard_paiement")
     cv = [row["cv_moyenne"] for row in result.leaderboard]

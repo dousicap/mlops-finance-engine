@@ -1,0 +1,94 @@
+# Généré par `finml init diabete --csv diabetes.csv --cible progression`.
+# 442 lignes. Tâche détectée : tabular_regression.
+# Porte qualité : battre une référence naïve. Relire avant la mise en production.
+
+name: diabete
+description: Prédiction de progression (tabular_regression), cas créé par finml init.
+task: tabular_regression
+registered_model: finml-diabete
+target: progression
+features:
+  numeric:
+  - age
+  - sex
+  - bmi
+  - bp
+  - s1
+  - s2
+  - s3
+  - s4
+  - s5
+  - s6
+  categorical: []
+schema: {}
+data:
+  path: usecases/diabete/donnees.csv
+  n_rows: 442
+  seed: 42
+metric: r2
+min_score: 0.0
+cv_folds: 5
+candidates:
+- name: regression_lineaire
+  type: linear_regression
+  params: {}
+- name: ridge
+  type: ridge
+  params:
+    alpha: 1.0
+- name: lasso
+  type: lasso
+  params:
+    alpha: 0.1
+- name: elastic_net
+  type: elastic_net
+  params:
+    alpha: 0.1
+    l1_ratio: 0.5
+- name: svr
+  type: svr
+  params:
+    C: 100.0
+- name: k_plus_proches_voisins
+  type: knn
+  params:
+    n_neighbors: 15
+- name: arbre_de_decision
+  type: decision_tree
+  params:
+    max_depth: 6
+    min_samples_leaf: 5
+- name: random_forest
+  type: random_forest
+  params:
+    n_estimators: 300
+    min_samples_leaf: 3
+- name: extra_trees
+  type: extra_trees
+  params:
+    n_estimators: 300
+    min_samples_leaf: 3
+- name: gradient_boosting_histogramme
+  type: hist_gradient_boosting
+  params:
+    max_iter: 300
+    learning_rate: 0.05
+- name: xgboost
+  type: xgboost
+  params:
+    n_estimators: 300
+    max_depth: 4
+    learning_rate: 0.05
+- name: lightgbm
+  type: lightgbm
+  params:
+    n_estimators: 300
+    num_leaves: 15
+    learning_rate: 0.05
+- name: reseau_neurones_sklearn
+  type: mlp
+  params:
+    hidden_layer_sizes:
+    - 64
+    - 32
+    alpha: 0.001

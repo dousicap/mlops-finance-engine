@@ -9,7 +9,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 
 
-USECASES = ("defaut_credit", "imputation_comptable", "maintenance_predictive", "retard_paiement")
+USECASES = ("defaut_credit", "diabete", "imputation_comptable", "maintenance_predictive", "retard_paiement")
 # Jeux réels : échantillon stratifié, trois candidats, porte qualité abaissée à l'échelle du test.
 REAL_DATA = {"defaut_credit": 0.6, "maintenance_predictive": 0.3}
 
@@ -63,7 +63,8 @@ def trained_base(tmp_path_factory):
         mp.setenv("FINML_ROOT", str(base))
         mp.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{base / 'mlflow.db'}")
         for name in USECASES:
-            data.generate(load_config(name))
+            if load_config(name).data.generator:  # sinon le CSV versionné sert directement
+                data.generate(load_config(name))
             train(name)
             export_champion(name, base / "models")
     return base

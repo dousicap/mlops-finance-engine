@@ -54,7 +54,7 @@ def _stdout_logger() -> logging.Logger:
         log.setLevel(logging.INFO)
         log.propagate = False
     return log
-OUTPUT_COLUMNS = ("probabilite", "confiance")
+OUTPUT_COLUMNS = ("probabilite", "confiance", "valeur")
 MIN_ROWS = 100
 
 
@@ -187,18 +187,24 @@ def simulate_records(cfg: UseCaseConfig, n: int, drift: bool, seed: int = 2026) 
 
     from finml.config import usecase_dir
 
-    gen_file = usecase_dir(cfg.name) / cfg.data.generator
-    spec = importlib.util.spec_from_file_location(f"finml_sim_{cfg.name}", gen_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
     # Tirage dans une population large : les variables propres à un client (ancienneté,
     # historique de retards) ne doivent pas venir d'une poignée de clients. Sinon les lignes
     # ne sont plus indépendantes et le test KS signale une dérive qui n'existe pas.
-    pool = module.generate(n_rows=max(n * 20, 5000), seed=seed)
+    if cfg.data.generator:
+        gen_file = usecase_dir(cfg.name) / cfg.data.generator
+        spec = importlib.util.spec_from_file_location(f"finml_sim_{cfg.name}", gen_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        pool = module.generate(n_rows=max(n * 20, 5000), seed=seed)
+    else:  # cas d'usage déclaré sur un CSV : tirage avec remise dans ce CSV
+        from finml.data import load
+
+        pool = load(cfg)
+        pool = pool.sample(max(n, len(pool)), replace=len(pool) < n, random_state=seed)
     df = pool.sample(n, random_state=seed).reset_index(drop=True)
     rng = np.random.default_rng(seed)
 
-    if drift and cfg.task == "tabular_classification":
+    if drift and cfg.is_tabular:
         for col in cfg.features.numeric:
             rule = cfg.schema_rules.get(col)
             if rule and rule.allowed is not None:  # variable codée (0/1) : on ne la décale pas

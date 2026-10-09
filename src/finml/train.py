@@ -25,19 +25,22 @@ from sklearn.metrics import (
     average_precision_score,
     classification_report,
     f1_score,
+    mean_absolute_error,
+    r2_score,
     roc_auc_score,
+    root_mean_squared_error,
 )
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 import finml
 from finml import business
 from finml import data as data_mod
-from finml.config import UseCaseConfig, load_config
+from finml.config import LOWER_IS_BETTER, UseCaseConfig, load_config
 from finml.fairness import fairness_report
-from finml.models import build_estimator, dump_estimator, predict_frame, text_class_scores
+from finml.models import build_estimator, class_scores, dump_estimator, is_binary, predict_frame
 
 CHAMPION, CHALLENGER = "champion", "challenger"
-OUTPUT_COLUMNS = ("probabilite", "confiance")
+OUTPUT_COLUMNS = ("probabilite", "confiance", "valeur")
 
 
 class QualityGateError(RuntimeError):
@@ -64,7 +67,14 @@ def default_tracking_uri() -> str:
 
 
 def evaluate(cfg: UseCaseConfig, est, X_test, y_test) -> dict[str, float]:
-    if cfg.task == "tabular_classification":
+    if cfg.is_regression:
+        pred = est.predict(X_test)
+        return {
+            "rmse": float(root_mean_squared_error(y_test, pred)),
+            "mae": float(mean_absolute_error(y_test, pred)),
+            "r2": float(r2_score(y_test, pred)),
+        }
+    if cfg.is_tabular and is_binary(est):
         proba = est.predict_proba(X_test)[:, 1]
         pred = (proba >= cfg.decision_threshold).astype(int)
         return {
@@ -73,22 +83,25 @@ def evaluate(cfg: UseCaseConfig, est, X_test, y_test) -> dict[str, float]:
             "f1": f1_score(y_test, pred),
             "accuracy": accuracy_score(y_test, pred),
         }
-    classes, scores = text_class_scores(est, X_test)
+    classes, scores = class_scores(est, cfg, X_test)
     pred = classes[scores.argmax(axis=1)]
     top3 = classes[np.argsort(-scores, axis=1)[:, :3]]
     y = np.asarray(y_test)
-    return {
+    metrics = {
         "accuracy": accuracy_score(y, pred),
         "f1": f1_score(y, pred, average="macro"),
         "top3_accuracy": float(np.mean([y[i] in top3[i] for i in range(len(y))])),
     }
+    if cfg.is_tabular:  # AUC multi-classes : une classe contre les autres, moyenne pondérée
+        metrics["roc_auc"] = roc_auc_score(y, scores, multi_class="ovr", average="weighted", labels=classes)
+    return metrics
 
 
 def _report(cfg: UseCaseConfig, est, X_test, y_test) -> dict:
-    if cfg.task == "tabular_classification":
+    if cfg.is_tabular and is_binary(est):
         pred = (est.predict_proba(X_test)[:, 1] >= cfg.decision_threshold).astype(int)
     else:
-        classes, scores = text_class_scores(est, X_test)
+        classes, scores = class_scores(est, cfg, X_test)
         pred = classes[scores.argmax(axis=1)]
     return classification_report(y_test, pred, output_dict=True, zero_division=0)
 
@@ -99,7 +112,7 @@ def _promote(client: MlflowClient, cfg: UseCaseConfig, version: str, score: floa
         current_score = client.get_run(current.run_id).data.metrics.get(cfg.metric, -1.0)
     except MlflowException:
         current_score = None
-    if current_score is None or score > current_score:
+    if current_score is None or cfg.better(score, current_score):
         client.set_registered_model_alias(cfg.registered_model, CHAMPION, version)
         return CHAMPION
     client.set_registered_model_alias(cfg.registered_model, CHALLENGER, version)
@@ -107,29 +120,39 @@ def _promote(client: MlflowClient, cfg: UseCaseConfig, version: str, score: floa
 
 
 def _scores(cfg: UseCaseConfig, est, X):
-    """Tabulaire : probabilité de la classe positive. Texte : (classe prédite, confiance)."""
-    if cfg.task == "tabular_classification":
+    """Binaire : probabilité de la classe positive. Multi-classes : (classe prédite, confiance).
+    Régression : valeur prédite."""
+    if cfg.is_regression:
+        return est.predict(X)
+    if cfg.is_tabular and is_binary(est):
         return est.predict_proba(X)[:, 1]
-    classes, scores = text_class_scores(est, X)
+    classes, scores = class_scores(est, cfg, X)
     return classes[scores.argmax(axis=1)], scores.max(axis=1)
 
 
 OPTIONAL_DEPS = {"torch_mlp": "torch"}
+BINARY_ONLY = {"torch_mlp"}
 
 
-def _available(cand) -> bool:
-    """Un candidat dont la bibliothèque optionnelle manque est ignoré, pas bloquant."""
+def _skip_reason(cand, n_classes: int) -> str | None:
+    """Un candidat inutilisable est ignoré avec sa raison, jamais bloquant."""
     import importlib.util
 
     module = OPTIONAL_DEPS.get(cand.type)
-    return module is None or importlib.util.find_spec(module) is not None
+    if module and importlib.util.find_spec(module) is None:
+        return f"bibliothèque {module} absente"
+    if cand.type in BINARY_ONLY and n_classes > 2:
+        return "modèle limité à la classification binaire"
+    return None
 
 
 def _cross_validate(cfg: UseCaseConfig, cand, X, y):
     """Validation croisée stratifiée : score par pli et prédictions hors échantillon."""
-    skf = StratifiedKFold(n_splits=cfg.cv_folds, shuffle=True, random_state=cfg.data.seed)
+    splitter = KFold if cfg.is_regression else StratifiedKFold
+    skf = splitter(n_splits=cfg.cv_folds, shuffle=True, random_state=cfg.data.seed)
     fold_scores = []
-    oof_proba = np.zeros(len(X)) if cfg.task == "tabular_classification" else None
+    single = cfg.is_regression or (cfg.is_tabular and y.nunique() == 2)  # une sortie numérique
+    oof_proba = np.zeros(len(X)) if single else None
     oof_pred = np.empty(len(X), dtype=object) if oof_proba is None else None
     oof_conf = np.zeros(len(X)) if oof_proba is None else None
     for tr, va in skf.split(X, y):
@@ -149,6 +172,8 @@ def _calibrate_business(cfg: UseCaseConfig, y_train, oof, est, X_test, y_test):
     if b is None:
         return cfg.decision_threshold, {}
     if b.kind == "cost":
+        if y_train.nunique() != 2:
+            raise ValueError(f"{cfg.name} : le bloc business « cost » exige une cible binaire")
         threshold = business.best_cost_threshold(y_train, oof, b)
         return threshold, business.cost_report(y_test, _scores(cfg, est, X_test), threshold, b)
     pred, conf = oof
@@ -166,7 +191,7 @@ def train(name: str) -> TrainResult:
     mlflow.set_tracking_uri(default_tracking_uri())
     mlflow.set_experiment(f"finml-{cfg.name}")
 
-    if cfg.task == "tabular_classification":
+    if cfg.is_tabular:
         X = df[cfg.features.all].astype({c: "float64" for c in cfg.features.numeric})
         y = df[cfg.target]
     else:
@@ -174,8 +199,10 @@ def train(name: str) -> TrainResult:
     # Les colonnes sensibles suivent le même découpage que X : elles ne servent qu'à l'audit.
     S = df[cfg.fairness.sensitive] if cfg.fairness else pd.DataFrame(index=df.index)
     X_train, X_test, y_train, y_test, _, S_test = train_test_split(
-        X, y, S, test_size=cfg.test_size, random_state=cfg.data.seed, stratify=y
+        X, y, S, test_size=cfg.test_size, random_state=cfg.data.seed,
+        stratify=None if cfg.is_regression else y,
     )
+    n_classes = 0 if cfg.is_regression else int(y.nunique())
     X_train, X_test = X_train.reset_index(drop=True), X_test.reset_index(drop=True)
     y_train, y_test = y_train.reset_index(drop=True), y_test.reset_index(drop=True)
 
@@ -194,8 +221,9 @@ def train(name: str) -> TrainResult:
 
         skipped: list[str] = []
         for cand in cfg.candidates:
-            if not _available(cand):
-                skipped.append(cand.name)  # dépendance optionnelle absente (ex. PyTorch)
+            reason = _skip_reason(cand, n_classes)
+            if reason:
+                skipped.append(f"{cand.name} ({reason})")
                 continue
             with mlflow.start_run(run_name=cand.name, nested=True) as run:
                 t0 = time.perf_counter()
@@ -212,9 +240,9 @@ def train(name: str) -> TrainResult:
                 runs[cand.name], fitted[cand.name], oofs[cand.name] = run.info.run_id, est, oof
 
         if skipped:
-            mlflow.set_tag("candidats_ignores", ",".join(skipped))
+            mlflow.set_tag("candidats_ignores", ", ".join(skipped))
         # Sélection sur la moyenne en validation croisée, jamais sur le jeu de test.
-        board.sort(key=lambda r: r["cv_moyenne"], reverse=True)
+        board.sort(key=lambda r: r["cv_moyenne"], reverse=cfg.metric not in LOWER_IS_BETTER)
         best = board[0]["candidat"]
         best_test = board[0]["test"]
         with tempfile.TemporaryDirectory() as tmp:
@@ -223,19 +251,23 @@ def train(name: str) -> TrainResult:
             mlflow.log_artifact(str(path))
         mlflow.set_tag("best_candidate", best)
         mlflow.log_metric(f"best_{cfg.metric}", best_test)
-        if best_test < cfg.min_score:
+        if not cfg.passes_gate(best_test):
             mlflow.set_tag("quality_gate", "failed")
-            raise QualityGateError(f"{cfg.name} : meilleur {cfg.metric} = {best_test:.3f} < seuil {cfg.min_score}")
+            limit = cfg.max_score if cfg.min_score is None else cfg.min_score
+            raise QualityGateError(f"{cfg.name} : meilleur {cfg.metric} = {best_test:.3f}, seuil {limit}")
         mlflow.set_tag("quality_gate", "passed")
 
         threshold, biz = _calibrate_business(cfg, y_train, oofs[best], fitted[best], X_test, y_test)
         served_cfg = cfg.model_copy(update={"decision_threshold": threshold})
         fair_metrics, fair_detail = {}, {}
         if cfg.fairness:
+            if n_classes != 2:
+                raise ValueError(f"{cfg.name} : l'audit d'équité exige une cible binaire")
             flag = _scores(cfg, fitted[best], X_test) >= threshold
             fair_metrics, fair_detail = fairness_report(y_test, flag, S_test, cfg.fairness)
             mlflow.set_tag("equite_statut", fair_detail["statut"])
             mlflow.log_dict(fair_detail, "equite.json")
+        _log_charts(cfg, board, fitted[best], threshold, X_test, y_test)
         with mlflow.start_run(run_id=runs[best], nested=True):
             mlflow.log_metrics({**biz, **fair_metrics})
             example = X_test.head(3).to_frame() if cfg.task == "text_classification" else X_test.head(3)
@@ -249,6 +281,28 @@ def train(name: str) -> TrainResult:
     scores = {r["candidat"]: r["test"] for r in board}
     return TrainResult(cfg.name, best, best_test, cfg.metric, runs[best], mv.version, alias, scores,
                        board, biz, fair_detail)
+
+
+def _log_charts(cfg: UseCaseConfig, board: list[dict], est, threshold: float, X_test, y_test) -> None:
+    """Classement du tournoi et diagnostics du champion, en images dans MLflow."""
+    import matplotlib.pyplot as plt
+
+    from finml import plots
+
+    figures = {"classement_tournoi": plots.leaderboard(board, cfg.metric)}
+    if cfg.is_regression:
+        figures["predit_contre_reel"] = plots.regression(y_test, est.predict(X_test))
+    elif cfg.is_tabular and is_binary(est):
+        proba = est.predict_proba(X_test)[:, 1]
+        figures["matrice_confusion"] = plots.confusion(y_test, (proba >= threshold).astype(int), [0, 1])
+        figures["courbes_roc_precision_rappel"] = plots.binary_curves(y_test, proba)
+    else:
+        classes, scores = class_scores(est, cfg, X_test)
+        figures["matrice_confusion"] = plots.confusion(np.asarray(y_test), classes[scores.argmax(axis=1)],
+                                                       list(classes))
+    for name, fig in figures.items():
+        mlflow.log_figure(fig, f"graphiques/{name}.png")
+        plt.close(fig)
 
 
 SERVING_CODE = Path(__file__).with_name("serving_model.py")

@@ -1,4 +1,4 @@
-"""Ligne de commande : finml list | generate | train | export | run-all | index-pgvector | batch | simulate | drift | llm-eval."""
+"""Ligne de commande : finml init | list | generate | train | export | run-all | index-pgvector | batch | simulate | drift | llm-eval."""
 
 from __future__ import annotations
 
@@ -15,6 +15,21 @@ def _targets(name: str) -> list[str]:
     return list_usecases() if name == "all" else [name]
 
 
+def cmd_init(args):
+    """Crée un cas d'usage à partir d'un CSV : type de tâche et colonnes détectés, config générée."""
+    from finml.scaffold import init_usecase
+
+    path, info = init_usecase(args.usecase, Path(args.csv), args.cible, force=args.force)
+    print(f"{args.usecase} : {info['task']} -> {path}")
+    print(f"  numériques   : {info['numeric']}")
+    print(f"  catégorielles: {info['categorical']}")
+    if info["text"]:
+        print(f"  texte        : {info['text']}")
+    for col, why in info["excluded"].items():
+        print(f"  exclue       : {col} ({why})")
+    print(f"Suite : finml generate {args.usecase} && finml train {args.usecase} && finml export {args.usecase}")
+
+
 def cmd_list(_):
     for name in list_usecases():
         cfg = load_config(name)
@@ -22,11 +37,11 @@ def cmd_list(_):
 
 
 def cmd_generate(args):
-    from finml.data import generate, load, validate
+    from finml.data import data_path, generate, load, validate
 
     for name in _targets(args.usecase):
         cfg = load_config(name)
-        path = generate(cfg)
+        path = generate(cfg) if cfg.data.generator else data_path(cfg)  # CSV fourni : contrôle seul
         report = validate(load(cfg), cfg)
         print(f"{name} : {report.n_rows} lignes -> {path} | qualité {'OK' if report.ok else report.errors}")
         for w in report.warnings:
@@ -200,7 +215,8 @@ def cmd_llm_eval(args):
     out = model.predict(X_test.to_frame())
     review = np.where(out["a_revoir"].to_numpy())[0][: args.n]
     history = VectorRetrievalClassifier(k=5).fit(X_train, y_train)
-    examples = history.explain(X_test.iloc[review].tolist())
+    examples = [[{cfg.features.text: e["texte"], cfg.output.class_field: e["classe"]} for e in near]
+                for near in history.explain(X_test.iloc[review].tolist())]
     cases = [{"libelle": X_test.iloc[i], "compte": y_test.iloc[i], "top3": json.loads(out["top3"].iloc[i]),
               "exemples": ex} for i, ex in zip(review, examples)]
     client = make_client(cfg, args.provider)
@@ -232,6 +248,12 @@ def cmd_run_all(args):
 def main(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(prog="finml", description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("init", help="créer un cas d'usage à partir d'un CSV")
+    p.add_argument("usecase")
+    p.add_argument("--csv", required=True)
+    p.add_argument("--cible", required=True, help="colonne à prédire")
+    p.add_argument("--force", action="store_true", help="remplacer une configuration existante")
+    p.set_defaults(func=cmd_init)
     sub.add_parser("list").set_defaults(func=cmd_list)
     for cmd, func in [("generate", cmd_generate), ("train", cmd_train)]:
         p = sub.add_parser(cmd)
