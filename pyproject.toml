@@ -28,6 +28,8 @@ torch = ["torch>=2.4,<3", "onnx>=1.16"]
 pgvector = ["psycopg[binary]>=3.2", "pgvector>=0.3"]
 embeddings = ["sentence-transformers>=3.0"]
 dev = ["pytest>=8.0", "httpx>=0.27", "ruff>=0.6"]
+# Recherche d'hyperparamètres : entraînement seulement, jamais dans l'image de service.
+train = ["optuna>=4,<5"]
 
 [project.scripts]
 finml = "finml.cli:main"

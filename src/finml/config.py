@@ -66,8 +66,30 @@ METRICS_BY_TASK = {
 }
 
 
+class SearchParam(BaseModel):
+    """Plage d'un hyperparamètre : entier, réel (échelle log possible) ou liste de choix."""
+
+    int_range: tuple[int, int] | None = Field(default=None, alias="int")
+    float_range: tuple[float, float] | None = Field(default=None, alias="float")
+    choice: list[Any] | None = None
+    log: bool = False
+
+    model_config = {"populate_by_name": True}
+
+    @model_validator(mode="after")
+    def _one_kind(self) -> SearchParam:
+        if sum(x is not None for x in (self.int_range, self.float_range, self.choice)) != 1:
+            raise ValueError("Déclarer exactement un de : int, float, choice")
+        return self
+
+
 class Candidate(BaseModel):
-    """Un modèle candidat. Le moteur entraîne tous les candidats et garde le meilleur."""
+    """Un modèle candidat. Le moteur entraîne tous les candidats et garde le meilleur.
+
+    `params` : réglage de départ. `search` : plages explorées par Optuna si le cas d'usage
+    déclare un bloc `tuning`. Le réglage trouvé n'est retenu que s'il bat le réglage de départ
+    en validation croisée.
+    """
 
     name: str
     type: Literal[
@@ -77,6 +99,27 @@ class Candidate(BaseModel):
         "tfidf_logreg", "tfidf_svm", "tfidf_naive_bayes", "knn_retrieval",
     ]
     params: dict[str, Any] = Field(default_factory=dict)
+    search: dict[str, SearchParam] = Field(default_factory=dict)
+
+
+class TuningConfig(BaseModel):
+    """Budget de la recherche d'hyperparamètres, par candidat. Graine : celle des données."""
+
+    n_trials: int = Field(default=20, ge=1)
+    timeout_seconds: float = Field(default=60, gt=0)
+
+
+class SelectionConfig(BaseModel):
+    """Règle de choix du champion.
+
+    Deux candidats sont à égalité si le test t corrigé ne montre pas d'écart (p > alpha) ET si
+    l'écart de moyenne en validation croisée reste sous la tolérance. À égalité, le modèle le
+    plus simple gagne : plus facile à expliquer, plus rapide, plus stable.
+    """
+
+    prefer_simpler: bool = True
+    alpha: float = Field(default=0.05, gt=0, lt=1)
+    tolerance: float = Field(default=0.01, ge=0)
 
 
 class OutputConfig(BaseModel):
@@ -170,6 +213,8 @@ class UseCaseConfig(BaseModel):
     llm: LLMConfig | None = None
     fairness: FairnessConfig | None = None
     output: OutputConfig = Field(default_factory=OutputConfig)
+    tuning: TuningConfig | None = None
+    selection: SelectionConfig = Field(default_factory=SelectionConfig)
 
     model_config = {"populate_by_name": True}
 

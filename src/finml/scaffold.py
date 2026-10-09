@@ -7,7 +7,8 @@ Détection, toujours écrite en commentaire dans la configuration générée pou
 - colonnes : numériques, catégorielles (50 modalités au plus), texte libre (longueur moyenne
   de 20 caractères ou plus), exclues (identifiant unique par ligne, constante, forte cardinalité) ;
 - porte qualité : battre une référence naïve (R2 > 0, AUC > 0,55, exactitude > classe majoritaire) ;
-- candidats : tout l'arsenal compatible avec la tâche, réglages par défaut raisonnables.
+- candidats : tout l'arsenal compatible avec la tâche, réglages par défaut raisonnables et
+  espace de recherche d'hyperparamètres (Optuna) pour chacun.
 
 Le CSV est copié dans le dossier du cas d'usage : la configuration et ses données sont versionnées
 ensemble, l'entraînement est reproductible.
@@ -23,6 +24,7 @@ import pandas as pd
 import yaml
 
 from finml.config import UseCaseConfig, project_root, usecases_root
+from finml.tuning import DEFAULT_SPACES
 
 MAX_CATEGORIES = 50
 MIN_TEXT_LENGTH = 20
@@ -161,7 +163,9 @@ def build_config(df: pd.DataFrame, name: str, target: str, data_path: str) -> tu
         "metric": metric,
         **gate,
         "cv_folds": folds,
-        "candidates": [{"name": n, "type": t, "params": p} for n, t, p in CANDIDATES[task]],
+        "tuning": {"n_trials": 20, "timeout_seconds": 45},
+        "candidates": [{"name": n, "type": t, "params": p, **({"search": DEFAULT_SPACES[t]} if t in DEFAULT_SPACES else {})}
+                       for n, t, p in CANDIDATES[task]],
     }
     UseCaseConfig.model_validate(cfg)  # la configuration générée doit être valide
     return cfg, info

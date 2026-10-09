@@ -26,11 +26,12 @@ from sklearn.metrics import (
 ACCENT, NEUTRAL = "#2a6f97", "#b8c4ce"
 
 
-def leaderboard(board: list[dict], metric: str):
+def leaderboard(board: list[dict], metric: str, champion: str | None = None):
+    champion = champion or board[0]["candidat"]
     names = [r["candidat"] for r in board][::-1]
     means = np.array([r["cv_moyenne"] for r in board])[::-1]
     stds = np.array([r["cv_ecart_type"] for r in board])[::-1]
-    colors = [NEUTRAL] * (len(board) - 1) + [ACCENT]
+    colors = [ACCENT if n == champion else NEUTRAL for n in names]
     fig, ax = plt.subplots(figsize=(8, 0.45 * len(board) + 1.2))
     ax.barh(names, means, xerr=stds, color=colors, capsize=3)
     lo = max(0.0, float((means - stds).min()) - 0.05) if metric not in {"rmse", "mae"} else 0.0

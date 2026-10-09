@@ -46,6 +46,7 @@ from finml.models import (
     is_binary,
     predict_frame,
 )
+from finml.tuning import pick_champion, tune
 
 CHAMPION, CHALLENGER = "champion", "challenger"
 OUTPUT_COLUMNS = ("probabilite", "confiance", "valeur")
@@ -69,6 +70,7 @@ class TrainResult:
     business_metrics: dict[str, float] = field(default_factory=dict)
     fairness: dict = field(default_factory=dict)
     evaluation: dict[str, float] = field(default_factory=dict)
+    selection_note: str | None = None
 
 
 def default_tracking_uri() -> str:
@@ -155,16 +157,30 @@ def _skip_reason(cand, n_classes: int) -> str | None:
     return None
 
 
+def _folds(cfg: UseCaseConfig, X, y, offset: int = 0):
+    """Plis de validation croisée, identiques pour tous les candidats.
+
+    offset=1 : autre mélange, réservé à la recherche d'hyperparamètres. Le réglage est ensuite
+    jugé sur les plis du classement, qu'il n'a pas vus : le meilleur de N essais mesurés sur les
+    mêmes plis serait un score flatteur (biais de sélection).
+    """
+    splitter = KFold if cfg.is_regression else StratifiedKFold
+    return splitter(n_splits=cfg.cv_folds, shuffle=True, random_state=cfg.data.seed + offset).split(X, y)
+
+
+def _fold_score(cfg: UseCaseConfig, cand, X, y, tr, va) -> float:
+    est = build_estimator(cfg, cand).fit(X.iloc[tr], y.iloc[tr])
+    return evaluate(cfg, est, X.iloc[va], y.iloc[va])[cfg.metric]
+
+
 def _cross_validate(cfg: UseCaseConfig, cand, X, y):
     """Validation croisée stratifiée : score par pli et prédictions hors échantillon."""
-    splitter = KFold if cfg.is_regression else StratifiedKFold
-    skf = splitter(n_splits=cfg.cv_folds, shuffle=True, random_state=cfg.data.seed)
     fold_scores = []
     single = cfg.is_regression or (cfg.is_tabular and y.nunique() == 2)  # une sortie numérique
     oof_proba = np.zeros(len(X)) if single else None
     oof_pred = np.empty(len(X), dtype=object) if oof_proba is None else None
     oof_conf = np.zeros(len(X)) if oof_proba is None else None
-    for tr, va in skf.split(X, y):
+    for tr, va in _folds(cfg, X, y):
         est = build_estimator(cfg, cand).fit(X.iloc[tr], y.iloc[tr])
         fold_scores.append(evaluate(cfg, est, X.iloc[va], y.iloc[va])[cfg.metric])
         out = _scores(cfg, est, X.iloc[va])
@@ -250,6 +266,16 @@ def train(name: str) -> TrainResult:
             with mlflow.start_run(run_name=cand.name, nested=True) as run:
                 t0 = time.perf_counter()
                 cv, oof = _cross_validate(cfg, cand, X_train, y_train)
+                cv_start, n_trials, tuned = float(cv.mean()), 0, False
+                if cfg.tuning and cand.search:
+                    params, trials = tune(cfg, cand, X_train, y_train, lambda X, y: _folds(cfg, X, y, offset=1),
+                                          lambda c, X, y, tr, va: _fold_score(cfg, c, X, y, tr, va))
+                    n_trials = len(trials)
+                    if params:
+                        tuned_cand = cand.model_copy(update={"params": params})
+                        cv_t, oof_t = _cross_validate(cfg, tuned_cand, X_train, y_train)
+                        if cfg.better(float(cv_t.mean()), cv_start):  # retenu seulement s'il fait mieux
+                            cand, cv, oof, tuned = tuned_cand, cv_t, oof_t, True
                 fold_scores[cand.name] = cv
                 est = build_estimator(cfg, cand).fit(X_train, y_train)
                 holdout = evaluate(cfg, est, X_test, y_test)
@@ -259,16 +285,25 @@ def train(name: str) -> TrainResult:
                                     f"cv_{cfg.metric}_std": float(cv.std()), "train_seconds": seconds})
                 board.append({"candidat": cand.name, "type": cand.type, "cv_moyenne": float(cv.mean()),
                               "cv_ecart_type": float(cv.std()), "test": float(holdout[cfg.metric]),
-                              "secondes": round(seconds, 1)})
+                              "secondes": round(seconds, 1), "cv_depart": cv_start, "essais": n_trials,
+                              "reglage": "optuna" if tuned else "depart"})
+                if n_trials:
+                    mlflow.set_tags({"reglage": "optuna" if tuned else "depart", "essais": n_trials})
                 runs[cand.name], fitted[cand.name], oofs[cand.name] = run.info.run_id, est, oof
 
         if skipped:
             mlflow.set_tag("candidats_ignores", ", ".join(skipped))
         # Sélection sur la moyenne en validation croisée, jamais sur le jeu de test.
         board.sort(key=lambda r: r["cv_moyenne"], reverse=cfg.metric not in LOWER_IS_BETTER)
-        best = board[0]["candidat"]
-        best_test = board[0]["test"]
         compare_to_champion(board, fold_scores, cfg)  # écart significatif ou égalité statistique
+        if board[0]["candidat"] == BASELINE:
+            mlflow.set_tag("quality_gate", "failed")
+            raise QualityGateError(f"{cfg.name} : aucun candidat ne bat la référence naïve")
+        best, note = pick_champion(cfg, board)  # à égalité, le plus simple gagne
+        if note:
+            mlflow.set_tag("regle_simplicite", note)
+            compare_to_champion(board, fold_scores, cfg, champion=best)
+        best_test = next(r["test"] for r in board if r["candidat"] == best)
         if positive is not None:
             mlflow.set_tag("classe_positive", str(positive))
         with tempfile.TemporaryDirectory() as tmp:
@@ -277,9 +312,6 @@ def train(name: str) -> TrainResult:
             mlflow.log_artifact(str(path))
         mlflow.set_tag("best_candidate", best)
         mlflow.log_metric(f"best_{cfg.metric}", best_test)
-        if best == BASELINE:
-            mlflow.set_tag("quality_gate", "failed")
-            raise QualityGateError(f"{cfg.name} : aucun candidat ne bat la référence naïve")
         if not cfg.passes_gate(best_test):
             mlflow.set_tag("quality_gate", "failed")
             limit = cfg.max_score if cfg.min_score is None else cfg.min_score
@@ -296,7 +328,7 @@ def train(name: str) -> TrainResult:
             fair_metrics, fair_detail = fairness_report(y_test, flag, S_test, cfg.fairness)
             mlflow.set_tag("equite_statut", fair_detail["statut"])
             mlflow.log_dict(fair_detail, "equite.json")
-        _log_charts(cfg, board, fitted[best], threshold, X_test, y_test)
+        _log_charts(cfg, board, best, fitted[best], threshold, X_test, y_test)
         eval_metrics, eval_detail = evaluate_champion(cfg, fitted[best], threshold, X_test, y_test)
         mlflow.log_dict(eval_detail, "evaluation.json")
         with mlflow.start_run(run_id=runs[best], nested=True):
@@ -311,16 +343,17 @@ def train(name: str) -> TrainResult:
     alias = _promote(client, cfg, mv.version, best_test)
     scores = {r["candidat"]: r["test"] for r in board}
     return TrainResult(cfg.name, best, best_test, cfg.metric, runs[best], mv.version, alias, scores,
-                       board, biz, fair_detail, eval_metrics)
+                       board, biz, fair_detail, eval_metrics, note)
 
 
-def _log_charts(cfg: UseCaseConfig, board: list[dict], est, threshold: float, X_test, y_test) -> None:
+def _log_charts(cfg: UseCaseConfig, board: list[dict], champion: str, est, threshold: float, X_test,
+                y_test) -> None:
     """Classement du tournoi et diagnostics du champion, en images dans MLflow."""
     import matplotlib.pyplot as plt
 
     from finml import plots
 
-    figures = {"classement_tournoi": plots.leaderboard(board, cfg.metric)}
+    figures = {"classement_tournoi": plots.leaderboard(board, cfg.metric, champion)}
     if cfg.is_regression:
         figures["predit_contre_reel"] = plots.regression(y_test, est.predict(X_test))
     elif cfg.is_tabular and is_binary(est):

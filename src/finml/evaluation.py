@@ -178,9 +178,11 @@ def corrected_t_test(a: np.ndarray, b: np.ndarray, test_size_ratio: float) -> fl
     return float(2 * stats.t.sf(abs(t), df=k - 1))
 
 
-def compare_to_champion(board: list[dict], fold_scores: dict, cfg: UseCaseConfig) -> None:
-    """Ajoute à chaque ligne du classement la p-value de l'écart avec le champion."""
-    champion = board[0]["candidat"]
+def compare_to_champion(board: list[dict], fold_scores: dict, cfg: UseCaseConfig,
+                        champion: str | None = None) -> None:
+    """Ajoute à chaque ligne du classement la p-value de l'écart avec le champion
+    (par défaut le meilleur en validation croisée)."""
+    champion = champion or board[0]["candidat"]
     ratio = 1 / (cfg.cv_folds - 1)
     for row in board:
         row["p_value_vs_champion"] = (

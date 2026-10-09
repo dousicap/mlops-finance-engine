@@ -17,12 +17,14 @@ REAL_DATA = {"defaut_credit": 0.6, "maintenance_predictive": 0.3}
 def _shrink(root: Path):
     """Jeux de données réduits pour garder des tests rapides."""
     sizes = {"retard_paiement": 3000, "imputation_comptable": 2500,
-             "defaut_credit": 3000, "maintenance_predictive": 3000}
+             "defaut_credit": 3000, "maintenance_predictive": 3000, "diabete": None}
     for name, n in sizes.items():
         cfg_file = root / "usecases" / name / "config.yaml"
         cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
-        cfg["data"]["n_rows"] = n
+        if n:
+            cfg["data"]["n_rows"] = n
         cfg["cv_folds"] = 3
+        cfg.pop("tuning", None)  # réglage Optuna testé à part (test_tuning.py), trop long ici
         if name in REAL_DATA:
             cfg["candidates"] = cfg["candidates"][:3]
             cfg["min_score"] = REAL_DATA[name]
@@ -36,6 +38,7 @@ def project(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("FINML_ROOT", str(tmp_path))
     monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'mlflow.db'}")
+    monkeypatch.setenv("FINML_TUNING_TRIALS", "1")  # cas créés par finml init : réglage minimal
     monkeypatch.delenv("FINML_MODELS_DIR", raising=False)
     return tmp_path
 

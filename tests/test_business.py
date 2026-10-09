@@ -66,7 +66,8 @@ def test_tournament_ranks_by_cross_validation_and_skips_missing_deps(project, mo
     result = train.train("retard_paiement")
     cv = [row["cv_moyenne"] for row in result.leaderboard]
     assert cv == sorted(cv, reverse=True)
-    assert result.best_candidate == result.leaderboard[0]["candidat"]
+    # le champion est le meilleur en CV, sauf égalité où un modèle plus simple est retenu
+    assert result.best_candidate == result.leaderboard[0]["candidat"] or result.selection_note
     assert "reseau_neurones_pytorch" not in {row["candidat"] for row in result.leaderboard}
     # tous les candidats sauf PyTorch, plus la référence naïve
     assert len(result.leaderboard) == len(load_config("retard_paiement").candidates)

@@ -64,19 +64,29 @@ business:
   minutes_per_item: 1.5
 
 
+# Recherche d'hyperparamètres (Optuna) : budget par candidat. Le réglage trouvé n'est
+# retenu que s'il bat le réglage de départ en validation croisée.
+tuning:
+  n_trials: 20
+  timeout_seconds: 45
+
 candidates:
   - name: tfidf_regression_logistique
     type: tfidf_logreg
     params: {C: 10.0}
+    search: {"C": {"float": [0.1, 100.0], "log": true}}
   - name: tfidf_svm_lineaire
     type: tfidf_svm
     params: {C: 1.0}
+    search: {"C": {"float": [0.05, 10.0], "log": true}}
   - name: tfidf_naive_bayes
     type: tfidf_naive_bayes
     params: {alpha: 0.1}
+    search: {"alpha": {"float": [0.01, 1.0], "log": true}}
   - name: recherche_vectorielle_k5
     type: knn_retrieval
     params: {k: 5, embedder: tfidf, embedder_params: {dim: 256}}
+    search: {"k": {"int": [3, 30]}}
   - name: recherche_vectorielle_k15
     type: knn_retrieval
     params: {k: 15, embedder: tfidf, embedder_params: {dim: 256}}
@@ -87,3 +97,4 @@ candidates:
   # - name: recherche_semantique_minilm
   #   type: knn_retrieval
   #   params: {k: 7, embedder: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2}
+    search: {"k": {"int": [3, 30]}}

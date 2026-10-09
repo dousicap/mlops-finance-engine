@@ -66,6 +66,8 @@ def cmd_train(args):
             p = row.get("p_value_vs_champion")
             print(f"  {row['candidat']:<32}{row['cv_moyenne']:>11.3f}{row['cv_ecart_type']:>11.3f}"
                   f"{row['test']:>8.3f}{row['secondes']:>10.1f}{'-' if p is None else f'{p:.3f}':>15}")
+        if r.selection_note:
+            print(f"  règle de simplicité : {r.selection_note}")
         for k, v in r.evaluation.items():
             print(f"  {k:<40}{v:>14.4f}")
         for k, v in r.business_metrics.items():

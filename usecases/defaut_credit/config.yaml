@@ -87,22 +87,33 @@ fairness:
   max_recall_gap: 0.10
   min_favorable_ratio: 0.80
 
+# Recherche d'hyperparamètres (Optuna) : budget par candidat. Le réglage trouvé n'est
+# retenu que s'il bat le réglage de départ en validation croisée.
+tuning:
+  n_trials: 20
+  timeout_seconds: 45
+
 candidates:
   - name: regression_logistique
     type: logistic_regression
     params: {C: 1.0}
+    search: {"C": {"float": [0.01, 100.0], "log": true}}
   - name: random_forest
     type: random_forest
     params: {n_estimators: 300, max_depth: 10, min_samples_leaf: 10}
+    search: {"max_depth": {"int": [4, 20]}, "min_samples_leaf": {"int": [1, 30]}, "max_features": {"choice": ["sqrt", 0.3, 0.6]}}
   - name: gradient_boosting_histogramme
     type: hist_gradient_boosting
     params: {max_iter: 300, learning_rate: 0.05, max_depth: 4}
+    search: {"learning_rate": {"float": [0.02, 0.3], "log": true}, "max_depth": {"int": [2, 10]}, "min_samples_leaf": {"int": [10, 100]}, "l2_regularization": {"float": [0.0001, 10.0], "log": true}}
   - name: xgboost
     type: xgboost
     params: {n_estimators: 400, max_depth: 4, learning_rate: 0.05, subsample: 0.8, colsample_bytree: 0.8}
+    search: {"n_estimators": {"int": [100, 800]}, "max_depth": {"int": [2, 8]}, "learning_rate": {"float": [0.01, 0.3], "log": true}, "subsample": {"float": [0.6, 1.0]}, "colsample_bytree": {"float": [0.5, 1.0]}, "min_child_weight": {"int": [1, 20]}}
   - name: lightgbm
     type: lightgbm
     params: {n_estimators: 400, num_leaves: 15, learning_rate: 0.05, subsample: 0.8, subsample_freq: 1}
+    search: {"n_estimators": {"int": [100, 800]}, "num_leaves": {"int": [7, 63]}, "learning_rate": {"float": [0.01, 0.3], "log": true}, "subsample": {"float": [0.6, 1.0]}, "colsample_bytree": {"float": [0.5, 1.0]}, "min_child_samples": {"int": [5, 100]}}
   - name: reseau_neurones_pytorch
     type: torch_mlp
     params: {hidden: [64, 32], dropout: 0.2, epochs: 40}
