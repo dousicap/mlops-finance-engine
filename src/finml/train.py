@@ -173,6 +173,21 @@ def _fold_score(cfg: UseCaseConfig, cand, X, y, tr, va) -> float:
     return evaluate(cfg, est, X.iloc[va], y.iloc[va])[cfg.metric]
 
 
+def _clearly_better(cfg: UseCaseConfig, tuned_scores, start_scores) -> bool:
+    """Le réglage optimisé bat-il nettement le réglage de départ, sur les mêmes plis ?
+
+    Même règle d'égalité que pour le choix du champion : sans écart significatif (test t
+    corrigé) et sous la tolérance, les deux sont à égalité et le réglage de départ est gardé.
+    """
+    from finml.evaluation import corrected_t_test
+
+    gain = float(np.mean(tuned_scores) - np.mean(start_scores))
+    if not cfg.better(float(np.mean(tuned_scores)), float(np.mean(start_scores))):
+        return False
+    p_value = corrected_t_test(tuned_scores, start_scores, 1 / (cfg.cv_folds - 1))
+    return p_value <= cfg.selection.alpha or abs(gain) > cfg.selection.tolerance
+
+
 def _cross_validate(cfg: UseCaseConfig, cand, X, y):
     """Validation croisée stratifiée : score par pli et prédictions hors échantillon."""
     fold_scores = []
@@ -274,7 +289,7 @@ def train(name: str) -> TrainResult:
                     if params:
                         tuned_cand = cand.model_copy(update={"params": params})
                         cv_t, oof_t = _cross_validate(cfg, tuned_cand, X_train, y_train)
-                        if cfg.better(float(cv_t.mean()), cv_start):  # retenu seulement s'il fait mieux
+                        if _clearly_better(cfg, cv_t, cv):  # à égalité, le réglage de départ reste
                             cand, cv, oof, tuned = tuned_cand, cv_t, oof_t, True
                 fold_scores[cand.name] = cv
                 est = build_estimator(cfg, cand).fit(X_train, y_train)

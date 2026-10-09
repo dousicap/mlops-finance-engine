@@ -9,7 +9,8 @@
   précédents au même pli.
 - Chaque essai est tracé dans MLflow (run imbriqué), la table complète en artefact.
 - Le réglage trouvé est ensuite mesuré sur les plis du classement, qu'il n'a pas vus, et n'est
-  retenu que s'il y bat le réglage de départ. Le réglage ne peut donc jamais dégrader la
+  retenu que s'il y bat nettement le réglage de départ (écart significatif ou supérieur à la
+  tolérance de la règle de sélection). Sinon les deux sont à égalité et le départ est gardé. Le réglage ne peut donc jamais dégrader la
   validation croisée d'un candidat, et son score n'est pas gonflé par la sélection.
 """
 
@@ -127,6 +128,9 @@ def tune(cfg: UseCaseConfig, cand: Candidate, X, y, cross_validate, fold_score) 
 def pick_champion(cfg: UseCaseConfig, board: list[dict]) -> tuple[str, str | None]:
     """Champion = meilleur en CV, sauf si un candidat plus simple est à égalité avec lui.
 
+    Ordre de préférence parmi les candidats à égalité : complexité la plus basse, puis réglage
+    de départ plutôt que réglage optimisé, puis meilleure moyenne de validation croisée.
+
     Renvoie (champion, explication si la règle de simplicité a joué).
     """
     best = board[0]
@@ -138,8 +142,14 @@ def pick_champion(cfg: UseCaseConfig, board: list[dict]) -> tuple[str, str | Non
             or ((r.get("p_value_vs_champion") or 0) > sel.alpha
                 and abs(r["cv_moyenne"] - best["cv_moyenne"]) <= sel.tolerance)]
     tied = [r for r in tied if r["type"] != "dummy"]
-    chosen = min(tied, key=lambda r: (COMPLEXITY.get(r["type"], 9), board.index(r)))
+    # À complexité égale, le réglage de départ l'emporte sur un réglage issu d'une recherche :
+    # le meilleur de N essais porte plus de risque d'optimisme, et le choix reste stable quel
+    # que soit le budget de recherche.
+    chosen = min(tied, key=lambda r: (COMPLEXITY.get(r["type"], 9), r.get("reglage") == "optuna",
+                                      board.index(r)))
     if chosen["candidat"] == best["candidat"]:
         return best["candidat"], None
+    simpler = COMPLEXITY.get(chosen["type"], 9) < COMPLEXITY.get(best["type"], 9)
+    reason = "modèle plus simple" if simpler else "réglage de départ préféré à un réglage optimisé"
     return chosen["candidat"], (f"{chosen['candidat']} retenu au lieu de {best['candidat']} : égalité statistique "
-                                f"(écart CV {best['cv_moyenne'] - chosen['cv_moyenne']:+.4f}), modèle plus simple")
+                                f"(écart CV {best['cv_moyenne'] - chosen['cv_moyenne']:+.4f}), {reason}")

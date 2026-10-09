@@ -56,3 +56,25 @@ def test_tuning_never_degrades_and_traces_trials(project, monkeypatch):
     exp = mlflow.get_experiment_by_name("finml-diabete")
     trials = mlflow.search_runs([exp.experiment_id], filter_string="tags.etat = 'complet'")
     assert len(trials) + len(mlflow.search_runs([exp.experiment_id], filter_string="tags.etat = 'elague'")) == 12
+
+
+def test_untuned_wins_a_tie_at_equal_complexity(project):
+    """Cas réel de la maintenance : XGBoost réglé et boosting par histogramme à égalité."""
+    cfg = load_config("maintenance_predictive")
+    board = [{**_row("xgboost", "xgboost", 0.8079, None), "reglage": "optuna"},
+             {**_row("hgb", "hist_gradient_boosting", 0.8015, 0.63), "reglage": "depart"},
+             {**_row("rf", "random_forest", 0.7915, 0.32), "reglage": "optuna"}]
+    champion, note = pick_champion(cfg, board)
+    assert champion == "hgb" and "réglage de départ" in note
+
+
+def test_tuning_kept_only_when_clearly_better(project):
+    import numpy as np
+
+    from finml.train import _clearly_better
+
+    cfg = load_config("retard_paiement")
+    start = np.array([0.735, 0.738, 0.733, 0.737, 0.736])
+    assert not _clearly_better(cfg, start + 0.0005, start)  # gain dans le bruit : égalité
+    assert _clearly_better(cfg, start + 0.02, start)  # au-delà de la tolérance
+    assert not _clearly_better(cfg, start - 0.02, start)  # moins bon

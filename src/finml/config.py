@@ -114,7 +114,8 @@ class SelectionConfig(BaseModel):
 
     Deux candidats sont à égalité si le test t corrigé ne montre pas d'écart (p > alpha) ET si
     l'écart de moyenne en validation croisée reste sous la tolérance. À égalité, le modèle le
-    plus simple gagne : plus facile à expliquer, plus rapide, plus stable.
+    plus simple gagne : plus facile à expliquer, plus rapide, plus stable. À complexité égale,
+    le réglage de départ l'emporte sur un réglage optimisé.
     """
 
     prefer_simpler: bool = True
